@@ -42,7 +42,7 @@ export function normalizeNewark(p) {
   const ds = (p.datasheets || []).find((d) => d.url) || null;
   const attr = (label) => (p.attributes || []).find((a) => a.attributeLabel === label)?.attributeValue ?? null;
   const moq = p.translatedMinimumOrderQuality ?? p.translatedMinimumOrderQuantity ?? null;
-  const breaks = (p.prices || []).map((b) => ({ qty: b.from, unitPrice: typeof b.cost === "number" ? b.cost : parseFloat(b.cost) }));
+  const breaks = (p.prices || []).map((b) => ({ qty: b.from, unitPrice: Number.isFinite(Number(b.cost)) && b.cost !== "" && b.cost != null ? Number(b.cost) : null }));
   if (moq && breaks.length && breaks[0].qty < moq) breaks[0] = { ...breaks[0], qty: moq };
   return {
     distributor: "Newark",

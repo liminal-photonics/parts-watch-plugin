@@ -21,7 +21,11 @@ async function ms(path, body) {
 
 function parsePrice(s) {
   if (typeof s === "number") return s;
-  const n = parseFloat(String(s || "").replace(/[^0-9.,]/g, "").replace(/,(?=\d{3}\b)/g, "").replace(",", "."));
+  let t = String(s || "").replace(/[^0-9.,]/g, "");
+  // the last separator is the decimal point when both appear ("1,234.56" or "1.234,56")
+  if (t.includes(",") && t.includes(".")) t = t.lastIndexOf(",") > t.lastIndexOf(".") ? t.replace(/\./g, "").replace(",", ".") : t.replace(/,/g, "");
+  else t = t.replace(/,(?=\d{3}\b)/g, "").replace(",", ".");
+  const n = parseFloat(t);
   return Number.isFinite(n) ? n : null;
 }
 
@@ -36,7 +40,7 @@ export function normalizeMouser(p) {
     manufacturer: p.Manufacturer || null,
     manufacturerPartNumber: p.ManufacturerPartNumber || null,
     description: p.Description || null,
-    stock: Number.isFinite(stock) ? stock : 0,
+    stock: Number.isFinite(stock) ? stock : p.AvailabilityInStock == null && !p.Availability ? null : 0, // no stock fields at all = not stated
     leadTime: p.LeadTime || null,
     lifecycle: p.LifecycleStatus || null, // Mouser leaves this empty for most active parts; null means "not stated", not "active".
     discontinued: /obsolete|discontinued|end of life|eol/i.test(p.LifecycleStatus || "") || p.IsDiscontinued === "true",

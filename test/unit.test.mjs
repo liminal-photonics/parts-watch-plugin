@@ -22,7 +22,7 @@ test("add, update, list and remove parts", async () => {
   let r = await addParts({ parts: [{ partNumber: "ABC", qty: 10, minStock: 500 }, { partNumber: "def" }] }, f);
   assert.deepEqual(r.added, ["ABC", "def"]);
   r = await addParts({ parts: [{ partNumber: "abc", priceChangePct: 2 }], defaults: { qty: 250 } }, f);
-  assert.deepEqual(r.updated, ["abc"]);
+  assert.deepEqual(r.updated, ["ABC"]); // the stored spelling is kept
   const l = await listParts({}, f);
   assert.equal(l.parts.length, 2);
   assert.equal(l.parts[0].qty, 10);
@@ -90,4 +90,38 @@ test("missing keys: check reports the skip notes and saves nothing", async () =>
   assert.equal((await load(f)).snapshots.length, 0);
   assert.equal(r.saved, false);
   Object.assign(process.env, saved);
+});
+
+test("edge cases: concurrent writes, junk entries, case-preserving update, add during a check", async () => {
+  const f = await tmp();
+  await Promise.all(Array.from({ length: 10 }, (_, i) => addParts({ parts: [{ partNumber: `P${i}` }] }, f)));
+  assert.equal((await listParts({}, f)).parts.length, 10, "no lost updates");
+  const raw = JSON.parse(await readFile(f, "utf8"));
+  raw.parts.push(null, { qty: 5 }, 7); raw.snapshots = [null, "x"];
+  await writeFile(f, JSON.stringify(raw));
+  assert.equal((await load(f)).parts.length, 10);
+  const g = await tmp();
+  await addParts({ parts: [{ partNumber: "LM358DR" }] }, g);
+  await runCheck({}, g, fake({ LM358DR: { digikey: rec({ priceBreaks: [{ qty: 1, unitPrice: 1 }, { qty: 100, unitPrice: 1 }] }) } }));
+  await addParts({ parts: [{ partNumber: "lm358dr", minStock: 5 }] }, g);
+  assert.equal((await listParts({}, g)).parts[0].partNumber, "LM358DR");
+  const r = await runCheck({}, g, fake({ LM358DR: { digikey: rec({ priceBreaks: [{ qty: 1, unitPrice: 1 }, { qty: 100, unitPrice: 2 }] }) } }));
+  assert.ok(r.changes.some((c) => c.type === "price-change"), "earlier snapshot still matched after a case change");
+  // a part added while a slow check runs survives the check's save
+  let release; const gate = new Promise((res) => (release = res));
+  const slow = async (a) => { await gate; return fake({ LM358DR: { digikey: rec() } })(a); };
+  const check = runCheck({ partNumbers: "LM358DR" }, g, slow);
+  await addParts({ parts: [{ partNumber: "BSS138" }] }, g);
+  release(); await check;
+  assert.deepEqual((await listParts({}, g)).parts.map((p) => p.partNumber), ["LM358DR", "BSS138"]);
+});
+
+test("watch file path: ~ expands to the home folder", async () => {
+  const { watchFile } = await import("../src/watch.js");
+  const { homedir } = await import("node:os");
+  const saved = process.env.PARTS_WATCH_FILE;
+  try {
+    process.env.PARTS_WATCH_FILE = "~/pw/w.json"; assert.equal(watchFile(), join(homedir(), "pw", "w.json"));
+    process.env.PARTS_WATCH_FILE = "/abs/w.json"; assert.equal(watchFile(), "/abs/w.json");
+  } finally { if (saved == null) delete process.env.PARTS_WATCH_FILE; else process.env.PARTS_WATCH_FILE = saved; }
 });

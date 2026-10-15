@@ -193,3 +193,12 @@ test("Newark matches MPNs listed without punctuation only when there is no exact
     assert.match(r.matchNote, /ERJ3EKF1002V/);
   } finally { globalThis.fetch = f; Object.assign(process.env, saved); }
 });
+
+test("edge cases: unusable price breaks, price formats, unknown stock", () => {
+  assert.equal(priceAt([{ qty: 1, unitPrice: null }, { qty: 10, unitPrice: NaN }], 100), null);
+  assert.equal(priceAt([{ qty: 1, unitPrice: 2 }, { qty: 10, unitPrice: NaN }], 100).unitPrice, 2);
+  const m = (price) => normalizeMouser({ PriceBreaks: [{ Quantity: 1, Price: price, Currency: "EUR" }] }).priceBreaks[0].unitPrice;
+  assert.equal(m("$1,234.56"), 1234.56); assert.equal(m("1.234,56 €"), 1234.56); assert.equal(m("0,27 €"), 0.27); assert.equal(m("$0.27"), 0.27);
+  assert.equal(normalizeMouser({}).stock, null);
+  assert.equal(normalizeMouser({ Availability: "None" }).stock, 0);
+});

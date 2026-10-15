@@ -10,7 +10,8 @@ const MAX_PARTS = 200;
 
 export function watchFile() {
   const f = (process.env.PARTS_WATCH_FILE || "").trim();
-  return f && !f.startsWith("${") ? f : join(homedir(), ".parts-watch", "watchlist.json");
+  if (!f || f.startsWith("${")) return join(homedir(), ".parts-watch", "watchlist.json");
+  return /^~(?=$|[\\/])/.test(f) ? join(homedir(), f.slice(1)) : f; // "~/x.json" (shells don't expand ~ inside env config)
 }
 
 export async function load(file = watchFile()) {
@@ -28,18 +29,24 @@ export async function load(file = watchFile()) {
     throw new Error(`The watch file at ${file} is not valid JSON. Fix or move it, then try again.`);
   }
   if (!d || !Array.isArray(d.parts)) throw new Error(`The watch file at ${file} has no "parts" list.`);
-  d.snapshots = Array.isArray(d.snapshots) ? d.snapshots : [];
+  // drop hand-edited junk entries instead of crashing on them
+  d.parts = d.parts.filter((p) => p && typeof p === "object" && typeof p.partNumber === "string" && p.partNumber.trim());
+  d.snapshots = Array.isArray(d.snapshots) ? d.snapshots.filter((s) => s && typeof s === "object" && s.parts && typeof s.parts === "object") : [];
   return d;
 }
 
 export async function save(d, file = watchFile()) {
   await mkdir(dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`; // unique per write
   await writeFile(tmp, JSON.stringify(d, null, 2) + "\n");
   await rename(tmp, file); // atomic replace, so a crash never leaves a half-written file
 }
 
 const key = (pn) => String(pn).trim().toUpperCase();
+
+// Serialize read-modify-write sections in this process so two tool calls can't overwrite each other's changes.
+let lock = Promise.resolve();
+function locked(fn) { const run = lock.then(fn, fn); lock = run.catch(() => {}); return run; }
 
 function num(v, field, { min = 0, int = false } = {}) {
   if (v == null || v === "") return undefined;
@@ -74,7 +81,8 @@ export function defaults(d) {
   return { qty: 100, minStock: 0, priceChangePct: 5, ...(d.defaults || {}) };
 }
 
-export async function addParts({ parts, defaults: dflt } = {}, file) {
+export function addParts(a = {}, file) { return locked(() => addPartsUnlocked(a, file)); }
+async function addPartsUnlocked({ parts, defaults: dflt } = {}, file) {
   const list = Array.isArray(parts) ? parts : parts ? [parts] : [];
   if (!list.length && !dflt) throw new Error("Give at least one part, e.g. { partNumber: \"RC0603FR-0710KL\", qty: 1000, minStock: 5000 }.");
   const cleaned = list.map(cleanPart);
@@ -90,7 +98,8 @@ export async function addParts({ parts, defaults: dflt } = {}, file) {
   const added = [], updated = [];
   for (const p of cleaned) {
     const i = d.parts.findIndex((x) => key(x.partNumber) === key(p.partNumber));
-    if (i >= 0) { d.parts[i] = { ...d.parts[i], ...p }; updated.push(p.partNumber); }
+    // keep the stored spelling so earlier snapshots (keyed by it) still match
+    if (i >= 0) { d.parts[i] = { ...d.parts[i], ...p, partNumber: d.parts[i].partNumber }; updated.push(d.parts[i].partNumber); }
     else { d.parts.push(p); added.push(p.partNumber); }
   }
   if (d.parts.length > MAX_PARTS) throw new Error(`A watch list can hold at most ${MAX_PARTS} parts.`);
@@ -98,7 +107,8 @@ export async function addParts({ parts, defaults: dflt } = {}, file) {
   return { file: file || watchFile(), added, updated, total: d.parts.length, defaults: defaults(d) };
 }
 
-export async function removeParts({ partNumbers } = {}, file) {
+export function removeParts(a = {}, file) { return locked(() => removePartsUnlocked(a, file)); }
+async function removePartsUnlocked({ partNumbers } = {}, file) {
   const list = (Array.isArray(partNumbers) ? partNumbers : partNumbers ? [partNumbers] : []).map((x) => String(x).trim()).filter(Boolean);
   if (!list.length) throw new Error("Give at least one part number to remove.");
   const d = await load(file);
@@ -182,7 +192,8 @@ export async function runCheck({ partNumbers, save: doSave = true } = {}, file, 
   const d = await load(file);
   if (!d.parts.length) throw new Error("The watch list is empty. Add parts first.");
   let parts = d.parts;
-  if (partNumbers?.length) {
+  if (typeof partNumbers === "string") partNumbers = partNumbers.split(/[,;\s]+/).filter(Boolean);
+  if (Array.isArray(partNumbers) && partNumbers.length) {
     const want = new Set(partNumbers.map(key));
     parts = d.parts.filter((p) => want.has(key(p.partNumber)));
     if (!parts.length) throw new Error("None of those part numbers are on the watch list.");
@@ -212,9 +223,13 @@ export async function runCheck({ partNumbers, save: doSave = true } = {}, file, 
   const changes = diffSnapshots(hasPrev ? prev : null, snap, d).filter((c) => c.type !== "unwatched");
   let saved = false;
   if (doSave && Object.values(snap.parts).some((e) => Object.keys(e.distributors).length)) {
-    d.snapshots.push(snap);
-    d.snapshots = d.snapshots.slice(-MAX_SNAPSHOTS);
-    await save(d, file);
+    // re-read under the lock: parts added or removed while the (slow) check ran must not be lost
+    await locked(async () => {
+      const fresh = await load(file);
+      fresh.snapshots.push(snap);
+      fresh.snapshots = fresh.snapshots.slice(-MAX_SNAPSHOTS);
+      await save(fresh, file);
+    });
     saved = true;
   }
   return {
