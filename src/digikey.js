@@ -52,20 +52,36 @@ async function dk(path, init = {}, retried = false) {
   return res.json();
 }
 
+// v4 splits one product into packaging variations (cut tape, tape & reel, Digi-Reel, tray...), each with its own
+// stock, MOQ and price breaks. Pick the variation a buyer would actually order from: in stock first, then cut tape,
+// then the lowest minimum order, then any variation that has prices.
+export function pickVariation(variations) {
+  const v = (variations || []).filter(Boolean);
+  const qty = (x) => x.QuantityAvailableforPackageType ?? 0;
+  const priced = (x) => (x.StandardPricing || []).length > 0;
+  const cut = (x) => /cut tape/i.test(x?.PackageType?.Name || "");
+  const moq = (x) => x.MinimumOrderQuantity ?? Infinity;
+  return [...v].sort((a, b) => (qty(b) > 0 && priced(b)) - (qty(a) > 0 && priced(a)) || priced(b) - priced(a) || cut(b) - cut(a) || moq(a) - moq(b) || qty(b) - qty(a))[0] || {};
+}
+
 export function normalizeDigikey(p) {
   if (!p) return null;
   const variations = p.ProductVariations || [];
-  // Prefer cut tape / standard package variation with most granular breaks.
-  const v = variations.find((x) => /cut tape/i.test(x?.PackageType?.Name || "")) || variations[0] || {};
+  const v = pickVariation(variations);
   const breaks = (v.StandardPricing || []).map((b) => ({ qty: b.BreakQuantity, unitPrice: b.UnitPrice }));
   const status = p.ProductStatus?.Status || null;
+  // Packaging variations share one pool of stock (cut tape and Digi-Reel are cut from the same reels; live data for
+  // LM358DR shows TR 85000, CT 85321, DKR 85321 with a product total of 85321), so summing them overcounts.
+  // Use the product total when given, else the largest variation.
+  const stock = p.QuantityAvailable ?? (variations.length ? Math.max(...variations.map((x) => Number(x.QuantityAvailableforPackageType) || 0)) : null);
   return {
     distributor: "Digi-Key",
     distributorPartNumber: v.DigiKeyProductNumber || null,
     manufacturer: p.Manufacturer?.Name || null,
     manufacturerPartNumber: p.ManufacturerProductNumber || null,
     description: p.Description?.ProductDescription || p.Description?.DetailedDescription || null,
-    stock: p.QuantityAvailable ?? (variations.length ? Math.max(...variations.map((x) => x.QuantityAvailableforPackageType ?? 0)) : null),
+    stock,
+    stockByPackaging: variations.map((x) => ({ distributorPartNumber: x.DigiKeyProductNumber || null, packaging: x.PackageType?.Name || null, stock: x.QuantityAvailableforPackageType ?? null, minimumOrderQty: x.MinimumOrderQuantity ?? null })),
     leadTime: p.ManufacturerLeadWeeks ? `${p.ManufacturerLeadWeeks} weeks (manufacturer)` : null,
     lifecycle: status,
     discontinued: Boolean(p.Discontinued),
@@ -102,7 +118,29 @@ export async function digikeySearch(keyword, limit = 10) {
     .map(normalizeDigikey);
 }
 
+const norm = (x) => String(x || "").toUpperCase().replace(/\s+/g, "");
+
 export async function digikeyDetails(partNumber) {
   const j = await dk(`/products/v4/search/${encodeURIComponent(partNumber)}/productdetails`);
-  return j?.Product ? normalizeDigikey(j.Product) : null;
+  if (j?.Product) return normalizeDigikey(j.Product);
+  // productdetails returns 404 when an MPN is shared by several manufacturers (e.g. LM358DR). Fall back to a
+  // keyword search and keep exact manufacturer or Digi-Key part number matches only.
+  const k = await dk(`/products/v4/search/keyword`, { method: "POST", body: JSON.stringify({ Keywords: partNumber, Limit: 20, Offset: 0 }) });
+  const want = norm(partNumber);
+  const seen = new Set();
+  const exact = [...(k?.ExactMatches || []), ...(k?.Products || [])].filter((p) => {
+    const hit = norm(p.ManufacturerProductNumber) === want || (p.ProductVariations || []).some((v) => norm(v.DigiKeyProductNumber) === want);
+    const id = `${p.Manufacturer?.Name}|${p.ManufacturerProductNumber}`;
+    if (!hit || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  if (!exact.length) return null;
+  const rows = exact.map(normalizeDigikey).sort((a, b) => (b.stock ?? 0) - (a.stock ?? 0));
+  const best = rows[0];
+  if (rows.length > 1) {
+    best.otherManufacturers = rows.slice(1).map((r) => ({ manufacturer: r.manufacturer, distributorPartNumber: r.distributorPartNumber, stock: r.stock }));
+    best.matchNote = `${rows.length} manufacturers list ${partNumber} on Digi-Key; showing the one with the most stock.`;
+  }
+  return best;
 }

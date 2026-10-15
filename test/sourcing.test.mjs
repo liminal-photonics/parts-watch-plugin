@@ -130,3 +130,46 @@ test("mouser near matches are not reported as found; 429 gives a rate-limit mess
     if (saved) process.env.MOUSER_API_KEY = saved; else delete process.env.MOUSER_API_KEY;
   }
 });
+
+import { pickVariation } from "../src/digikey.js";
+test("digikey takes stock across packaging without double counting and prices from the in-stock cut tape", () => {
+  const n = normalizeDigikey({ ManufacturerProductNumber: "B", ProductVariations: [
+    { DigiKeyProductNumber: "B-TR-ND", PackageType: { Name: "Tape & Reel (TR)" }, QuantityAvailableforPackageType: 5000, MinimumOrderQuantity: 2500, StandardPricing: [{ BreakQuantity: 2500, UnitPrice: 0.01 }] },
+    { DigiKeyProductNumber: "B-CT-ND", PackageType: { Name: "Cut Tape (CT)" }, QuantityAvailableforPackageType: 300, MinimumOrderQuantity: 1, StandardPricing: [{ BreakQuantity: 1, UnitPrice: 0.1 }] },
+    { DigiKeyProductNumber: "B-DKR-ND", PackageType: { Name: "Digi-Reel®" }, QuantityAvailableforPackageType: 0, MinimumOrderQuantity: 1, StandardPricing: [{ BreakQuantity: 1, UnitPrice: 0.1 }] },
+  ] });
+  assert.equal(n.stock, 5000);
+  assert.equal(n.distributorPartNumber, "B-CT-ND");
+  assert.equal(n.stockByPackaging.length, 3);
+  // Cut tape out of stock: fall back to the in-stock reel.
+  assert.equal(pickVariation([
+    { DigiKeyProductNumber: "CT", PackageType: { Name: "Cut Tape (CT)" }, QuantityAvailableforPackageType: 0, StandardPricing: [{}] },
+    { DigiKeyProductNumber: "TR", PackageType: { Name: "Tape & Reel (TR)" }, QuantityAvailableforPackageType: 10, StandardPricing: [{}] },
+  ]).DigiKeyProductNumber, "TR");
+  // Nothing in stock: prefer a priced cut tape over an unpriced reel.
+  assert.equal(pickVariation([
+    { DigiKeyProductNumber: "TR", PackageType: { Name: "Tape & Reel (TR)" }, QuantityAvailableforPackageType: 0 },
+    { DigiKeyProductNumber: "CT", PackageType: { Name: "Cut Tape (CT)" }, QuantityAvailableforPackageType: 0, StandardPricing: [{}] },
+  ]).DigiKeyProductNumber, "CT");
+});
+
+test("digikey details falls back to keyword search with exact MPN matching", async () => {
+  const saved = { ...process.env }, f = globalThis.fetch;
+  process.env.DIGIKEY_CLIENT_ID = "id"; process.env.DIGIKEY_CLIENT_SECRET = "s";
+  const { digikeyDetails } = await import("../src/digikey.js");
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes("oauth2")) return new Response(JSON.stringify({ access_token: "t", expires_in: 600 }));
+    if (u.includes("productdetails")) return new Response("", { status: 404 });
+    return new Response(JSON.stringify({ ExactMatches: [
+      { ManufacturerProductNumber: "LM358DR", Manufacturer: { Name: "Maker A" }, ProductVariations: [{ DigiKeyProductNumber: "A-CT", PackageType: { Name: "Cut Tape (CT)" }, QuantityAvailableforPackageType: 40, StandardPricing: [{ BreakQuantity: 1, UnitPrice: 0.3 }] }] },
+      { ManufacturerProductNumber: "LM358DR", Manufacturer: { Name: "Maker B" }, QuantityAvailable: 900, ProductVariations: [] },
+    ], Products: [{ ManufacturerProductNumber: "LM358DR2G", Manufacturer: { Name: "Maker C" }, QuantityAvailable: 99999 }] }));
+  };
+  try {
+    const r = await digikeyDetails("lm358dr");
+    assert.equal(r.manufacturer, "Maker B");
+    assert.equal(r.otherManufacturers.length, 1);
+    assert.match(r.matchNote, /2 manufacturers/);
+  } finally { globalThis.fetch = f; Object.assign(process.env, saved); }
+});
