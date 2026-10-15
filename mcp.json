@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "parts-watch": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "github:liminal-photonics/parts-watch-plugin"],
+      "env": {
+        "DIGIKEY_CLIENT_ID": "${env:DIGIKEY_CLIENT_ID}",
+        "DIGIKEY_CLIENT_SECRET": "${env:DIGIKEY_CLIENT_SECRET}",
+        "MOUSER_API_KEY": "${env:MOUSER_API_KEY}",
+        "NEWARK_API_KEY": "${env:NEWARK_API_KEY}",
+        "NEWARK_STORE": "${env:NEWARK_STORE}",
+        "PARTS_WATCH_FILE": "${env:PARTS_WATCH_FILE}"
+      }
+    }
+  }
+}
