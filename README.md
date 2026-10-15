@@ -55,7 +55,8 @@ Never commit keys. The plugin reads them from the environment only and never wri
 - Mouser leaves lifecycle empty for most active parts. Newark reports stocking status (e.g. `DIRECT_SHIP`, `NO_LONGER_STOCKED`) rather than manufacturer lifecycle.
 - Checks run two parts at a time to stay under distributor rate limits. A 200-part list takes a few minutes and uses part of each distributor's daily quota.
 - Timeouts (20 s) and HTTP 429 rate limits are reported per distributor without stopping the check.
-- Digi-Key splits a product into packaging options (cut tape, tape & reel, Digi-Reel). Prices come from the in-stock option a buyer would order (cut tape first, then the lowest minimum order); stock is Digi-Key's product total, because the options share one pool. Each option's stock is listed under `stockByPackaging`. When a part number is shared by several manufacturers, Digi-Key's exact lookup fails, so the tool falls back to keyword search, keeps exact part-number matches only and lists the other manufacturers.
+- Digi-Key splits a product into packaging options (cut tape, tape & reel, Digi-Reel). Prices come from the in-stock option a buyer would order (cut tape first, then the lowest minimum order); stock is Digi-Key's product total, because the options share one pool. Each option's stock is listed under `stockByPackaging`. When a part number is shared by several manufacturers, Digi-Key's exact lookup fails, so the tool falls back to keyword search, keeps exact part-number matches only, prefers the manufacturer you can order from stock in small quantities, and lists the others.
+- Part numbers match exactly first. Newark often lists part numbers without punctuation (ERJ-3EKF1002V is ERJ3EKF1002V there), so when there's no exact match the tools also accept a match that ignores punctuation, and say so. Mouser rejects some symbols in keywords, so µ, Ω, ± and ° are converted to u, ohm, +/- and deg for Mouser.
 
 ## Development
 

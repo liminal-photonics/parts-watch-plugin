@@ -73,18 +73,24 @@ export async function newarkSearch(keyword, limit = 10) {
   return (await e14(`any:${keyword}`, limit)).slice(0, limit).map(normalizeNewark);
 }
 
+const alnum = (x) => String(x || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+
 export async function newarkDetails(partNumber) {
   let parts = await e14(`manuPartNum:${partNumber}`, 10);
   if (!parts.length) parts = await e14(`id:${partNumber}`, 1); // Newark/Farnell order code
   const pn = partNumber.toUpperCase();
   // MPN search is fuzzy and one MPN can have several Newark SKUs (cut tape, reel, legacy). Keep exact
   // matches only. Prefer SKUs in stock, then the lowest minimum order (cut tape before full reel), then most stock.
-  const exact = parts.filter((p) => (p.translatedManufacturerPartNumber || "").toUpperCase() === pn || String(p.sku || "").toUpperCase() === pn);
+  let exact = parts.filter((p) => (p.translatedManufacturerPartNumber || "").toUpperCase() === pn || String(p.sku || "").toUpperCase() === pn);
+  // Newark often stores MPNs without punctuation (ERJ-3EKF1002V is listed as ERJ3EKF1002V). Use a punctuation-blind
+  // match only when there is no exact one.
+  if (!exact.length) exact = parts.filter((p) => alnum(p.translatedManufacturerPartNumber) === alnum(pn) && alnum(pn).length >= 4);
   if (!exact.length) return null;
   const stk = (p) => p.stock?.level ?? p.inv ?? 0;
   const moq = (p) => p.translatedMinimumOrderQuality ?? p.translatedMinimumOrderQuantity ?? 1;
   exact.sort((a, b) => (stk(b) > 0) - (stk(a) > 0) || moq(a) - moq(b) || stk(b) - stk(a));
   const best = normalizeNewark(exact[0]);
+  if (alnum(best.manufacturerPartNumber) === alnum(pn) && String(best.manufacturerPartNumber).toUpperCase() !== pn && String(exact[0].sku || "").toUpperCase() !== pn) best.matchNote = `Newark lists this part as ${best.manufacturerPartNumber}.`;
   if (exact.length > 1) best.otherSkus = exact.slice(1).map((p) => ({ sku: p.sku, status: p.productStatus, stock: stk(p), minimumOrderQty: moq(p) }));
   return best;
 }

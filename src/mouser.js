@@ -53,7 +53,13 @@ export function normalizeMouser(p) {
   };
 }
 
+// Mouser's API rejects some non-ASCII characters with HTTP 400 (e.g. "µ" in "10µF"). Map common symbols to ASCII.
+export function asciiKeyword(k) {
+  return String(k).replace(/[µμ]/g, "u").replace(/[Ωω]/g, "ohm").replace(/±/g, "+/-").replace(/°/g, "deg").normalize("NFKD").replace(/[^\x20-\x7E]/g, "");
+}
+
 export async function mouserSearch(keyword, limit = 10) {
+  keyword = asciiKeyword(keyword);
   const j = await ms(`/search/keyword`, {
     SearchByKeywordRequest: { keyword, records: Math.min(limit, 50), startingRecord: 0, searchOptions: "", searchWithYourSignUpLanguage: "" },
   });
@@ -62,11 +68,13 @@ export async function mouserSearch(keyword, limit = 10) {
 
 export async function mouserDetails(partNumber) {
   const j = await ms(`/search/partnumber`, {
-    SearchByPartRequest: { mouserPartNumber: partNumber, partSearchOptions: "Exact" },
+    SearchByPartRequest: { mouserPartNumber: asciiKeyword(partNumber), partSearchOptions: "Exact" },
   });
   const parts = j.SearchResults?.Parts || [];
   const pn = partNumber.toUpperCase();
-  const exact = parts.find((p) => (p.ManufacturerPartNumber || "").toUpperCase() === pn || (p.MouserPartNumber || "").toUpperCase() === pn);
+  const alnum = (x) => String(x || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const exact = parts.find((p) => (p.ManufacturerPartNumber || "").toUpperCase() === pn || (p.MouserPartNumber || "").toUpperCase() === pn)
+    || (alnum(pn).length >= 4 ? parts.find((p) => alnum(p.ManufacturerPartNumber) === alnum(pn)) : undefined);
   // Mouser can return near matches; only an exact MPN or Mouser PN counts as found.
   return exact ? normalizeMouser(exact) : null;
 }

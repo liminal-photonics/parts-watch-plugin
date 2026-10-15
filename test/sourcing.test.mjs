@@ -168,8 +168,28 @@ test("digikey details falls back to keyword search with exact MPN matching", asy
   };
   try {
     const r = await digikeyDetails("lm358dr");
-    assert.equal(r.manufacturer, "Maker B");
+    assert.equal(r.manufacturer, "Maker A"); // orderable from stock in small quantities beats a larger unpriced listing
     assert.equal(r.otherManufacturers.length, 1);
     assert.match(r.matchNote, /2 manufacturers/);
+  } finally { globalThis.fetch = f; Object.assign(process.env, saved); }
+});
+
+import { asciiKeyword } from "../src/mouser.js";
+test("Mouser keywords are made ASCII-safe", () => {
+  assert.equal(asciiKeyword("10µF 0805 ±10% 100Ω"), "10uF 0805 +/-10% 100ohm");
+});
+
+test("Newark matches MPNs listed without punctuation only when there is no exact match", async () => {
+  const saved = { ...process.env }, f = globalThis.fetch;
+  process.env.NEWARK_API_KEY = "k";
+  const { newarkDetails } = await import("../src/newark.js");
+  globalThis.fetch = async () => new Response(JSON.stringify({ manufacturerPartNumberSearchReturn: { numberOfResults: 2, products: [
+    { sku: "64R5309", translatedManufacturerPartNumber: "ERJ3EKF1002V", stock: { level: 500 }, prices: [{ from: 1, cost: 0.1 }] },
+    { sku: "66F9086", translatedManufacturerPartNumber: "CRCW060310K0FKTA", stock: { level: 9000 }, prices: [{ from: 1, cost: 0.1 }] },
+  ] } }));
+  try {
+    const r = await newarkDetails("ERJ-3EKF1002V");
+    assert.equal(r.distributorPartNumber, "64R5309");
+    assert.match(r.matchNote, /ERJ3EKF1002V/);
   } finally { globalThis.fetch = f; Object.assign(process.env, saved); }
 });

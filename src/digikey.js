@@ -136,11 +136,14 @@ export async function digikeyDetails(partNumber) {
     return true;
   });
   if (!exact.length) return null;
-  const rows = exact.map(normalizeDigikey).sort((a, b) => (b.stock ?? 0) - (a.stock ?? 0));
+  // Rank: orderable in small quantities from stock (min order <= 100 with a price), then most stock. This avoids picking
+  // a reel-only broker listing (e.g. BSS138 from a reseller with a 6000-piece minimum) over the original manufacturer.
+  const smallOrder = (r) => (r.stock ?? 0) > 0 && r.priceBreaks.length > 0 && (r.minimumOrderQty ?? r.priceBreaks[0].qty ?? Infinity) <= 100;
+  const rows = exact.map(normalizeDigikey).sort((a, b) => smallOrder(b) - smallOrder(a) || (b.stock ?? 0) - (a.stock ?? 0));
   const best = rows[0];
   if (rows.length > 1) {
-    best.otherManufacturers = rows.slice(1).map((r) => ({ manufacturer: r.manufacturer, distributorPartNumber: r.distributorPartNumber, stock: r.stock }));
-    best.matchNote = `${rows.length} manufacturers list ${partNumber} on Digi-Key; showing the one with the most stock.`;
+    best.otherManufacturers = rows.slice(1).map((r) => ({ manufacturer: r.manufacturer, distributorPartNumber: r.distributorPartNumber, stock: r.stock, minimumOrderQty: r.minimumOrderQty }));
+    best.matchNote = `${rows.length} manufacturers list ${partNumber} on Digi-Key; showing the one you can order in small quantities from stock (others under otherManufacturers).`;
   }
   return best;
 }
