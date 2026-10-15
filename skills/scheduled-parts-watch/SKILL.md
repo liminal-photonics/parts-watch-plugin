@@ -9,7 +9,7 @@ description: Set up and run a recurring watch on a BOM or part list across Digi-
 1. Confirm keys with `watch_status`. At least one distributor must be configured; the others are skipped with a note. Keys are the same as the parts-sourcing plugin (`DIGIKEY_CLIENT_ID` + `DIGIKEY_CLIENT_SECRET`, `MOUSER_API_KEY`, `NEWARK_API_KEY`). Never print or ask the user to paste key values into chat.
 2. Turn the BOM into watch entries. For each line, ask for (or infer from the BOM) the **build quantity** to price at and a **minimum stock** that would put the build at risk (a sensible default is 2-3x the build quantity). Keep the default 5% price-change threshold unless the user says otherwise.
 3. Call `watch_add` with all parts in one call. Set list-wide `defaults` when most parts share a quantity.
-4. Run a first `watch_check` to save the baseline. Explain that the first check only reports parts already below their stock threshold; changes show up from the second check onward.
+4. Run a first `watch_check` to save the baseline. Explain that the first check only reports parts already below their stock threshold, part numbers no distributor lists, and parts already end-of-life; changes show up from the second check onward.
 
 ## Schedule
 - Offer a cadence: daily for active builds or allocation-prone parts, weekly otherwise. Avoid more than a few checks a day; distributor APIs have daily quotas.

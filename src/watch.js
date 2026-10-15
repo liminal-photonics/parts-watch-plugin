@@ -170,16 +170,24 @@ export function diffSnapshots(prev, cur, d) {
       if (pp.qty === cp.qty && o.unitPrice != null && c.unitPrice != null && o.currency === c.currency) {
         const ch = pct(o.unitPrice, c.unitPrice);
         if (ch != null && Math.abs(ch) >= cfg.priceChangePct && o.unitPrice !== c.unitPrice)
-          add("price-change", `unit price at qty ${cp.qty} ${o.unitPrice} -> ${c.unitPrice} (${ch > 0 ? "+" : ""}${ch}%)`, { from: o.unitPrice, to: c.unitPrice, changePct: ch, qty: cp.qty });
+          add("price-change", `unit price at qty ${cp.qty} ${o.unitPrice} -> ${c.unitPrice}${c.currency ? ` ${c.currency}` : ""} (${ch > 0 ? "+" : ""}${ch}%)`, { from: o.unitPrice, to: c.unitPrice, changePct: ch, qty: cp.qty });
       } else if (o.unitPrice != null && c.unitPrice == null) add("price-missing", `no price at qty ${cp.qty} now (was ${o.unitPrice})`);
       if ((o.lifecycle || null) !== (c.lifecycle || null) || o.discontinued !== c.discontinued)
         add("lifecycle-change", `lifecycle "${o.lifecycle ?? "not stated"}" -> "${c.lifecycle ?? "not stated"}"${c.discontinued && !o.discontinued ? " (now flagged discontinued)" : ""}`);
       if ((o.leadTime || null) !== (c.leadTime || null)) add("lead-time-change", `lead time "${o.leadTime ?? "not stated"}" -> "${c.leadTime ?? "not stated"}"`);
     }
+    // State alerts a first check would otherwise miss: a part no distributor lists (likely a typo) and parts already end-of-life.
+    const missing = (x) => x && Object.values(x.distributors || {}).length > 0 && Object.values(x.distributors).every((e) => e && !e.found && !e.error);
+    if (missing(cp) && !missing(pp)) changes.push({ partNumber: pn, type: "not-found", detail: "Not found at any distributor checked; check the part number" });
+    if (!pp) for (const [dist, c] of Object.entries(cp.distributors)) {
+      if (c.found && (c.discontinued || EOL.test(c.lifecycle || ""))) changes.push({ partNumber: pn, distributor: dist, type: "end-of-life", detail: `already "${c.lifecycle ?? "discontinued"}" at the first check` });
+    }
   }
   if (prev) for (const pn of Object.keys(prev.parts)) if (!cur.parts[pn]) changes.push({ partNumber: pn, type: "unwatched", detail: "No longer on the watch list" });
   return changes;
 }
+
+const EOL = /obsolete|end of life|\beol\b|no_longer|not recommended|last time buy|discontinued/i;
 
 async function mapLimit(items, n, fn) {
   const out = new Array(items.length);
@@ -234,7 +242,7 @@ export async function runCheck({ partNumbers, save: doSave = true } = {}, file, 
   }
   return {
     checkedAt: snap.takenAt,
-    comparedWith: hasPrev ? "latest earlier snapshot of each part" : "nothing (first check; only threshold alerts)",
+    comparedWith: hasPrev ? "latest earlier snapshot of each part" : "nothing (first check; only threshold, not-found and end-of-life alerts)",
     saved,
     changes,
     summary: `${Object.keys(snap.parts).length} parts checked, ${changes.length} change${changes.length === 1 ? "" : "s"}`,

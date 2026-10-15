@@ -19,7 +19,7 @@ async function getToken() {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
   });
-  if (!res.ok) throw new Error(`Digi-Key auth failed: HTTP ${res.status}`);
+  if (!res.ok) throw new Error(res.status === 400 || res.status === 401 || res.status === 403 ? `Digi-Key rejected the client ID/secret (HTTP ${res.status}). Check DIGIKEY_CLIENT_ID and DIGIKEY_CLIENT_SECRET.` : `Digi-Key auth failed: HTTP ${res.status}`);
   const j = await res.json();
   tokenCache = { token: j.access_token, expires: Date.now() + (j.expires_in || 600) * 1000 };
   return tokenCache.token;
@@ -83,6 +83,7 @@ export function normalizeDigikey(p) {
     stock,
     stockByPackaging: variations.map((x) => ({ distributorPartNumber: x.DigiKeyProductNumber || null, packaging: x.PackageType?.Name || null, stock: x.QuantityAvailableforPackageType ?? null, minimumOrderQty: x.MinimumOrderQuantity ?? null })),
     leadTime: p.ManufacturerLeadWeeks ? `${p.ManufacturerLeadWeeks} weeks (manufacturer)` : null,
+    leadTimeDays: Number.parseFloat(p.ManufacturerLeadWeeks) > 0 ? Math.round(Number.parseFloat(p.ManufacturerLeadWeeks) * 7) : null, // same unit at every distributor
     lifecycle: status,
     discontinued: Boolean(p.Discontinued),
     endOfLife: Boolean(p.EndOfLife),

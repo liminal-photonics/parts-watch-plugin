@@ -2,6 +2,9 @@
 import { request } from "./http.js";
 const BASE = process.env.MOUSER_API_BASE || "https://api.mouser.com/api/v1";
 
+// "168 Days", "12 Weeks" -> days
+const leadDays = (t) => { const m = String(t || "").match(/(\d+(?:\.\d+)?)\s*(day|week)/i); const d = m ? Math.round(Number(m[1]) * (/week/i.test(m[2]) ? 7 : 1)) : 0; return d > 0 ? d : null; }; // "0 Days" = not stated
+
 export function mouserConfigured() {
   return Boolean(process.env.MOUSER_API_KEY);
 }
@@ -13,9 +16,10 @@ async function ms(path, body) {
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify(body),
   });
+  if (res.status === 401 || res.status === 403) throw new Error(`Mouser rejected the API key (HTTP ${res.status}). Check MOUSER_API_KEY.`);
   if (!res.ok) throw new Error(`Mouser HTTP ${res.status}`);
   const j = await res.json();
-  if (j.Errors && j.Errors.length) throw new Error(`Mouser: ${j.Errors.map((e) => e.Message).join("; ")}`);
+  if (j.Errors && j.Errors.length) { const msg = j.Errors.map((e) => e.Message).join("; "); throw new Error(/unique identifier|api ?key|unauthori[sz]ed/i.test(msg) ? `Mouser rejected the API key (${msg}). Check MOUSER_API_KEY.` : `Mouser: ${msg}`); }
   return j;
 }
 
@@ -42,6 +46,7 @@ export function normalizeMouser(p) {
     description: p.Description || null,
     stock: Number.isFinite(stock) ? stock : p.AvailabilityInStock == null && !p.Availability ? null : 0, // no stock fields at all = not stated
     leadTime: p.LeadTime || null,
+    leadTimeDays: leadDays(p.LeadTime), // same unit at every distributor
     lifecycle: p.LifecycleStatus || null, // Mouser leaves this empty for most active parts; null means "not stated", not "active".
     discontinued: /obsolete|discontinued|end of life|eol/i.test(p.LifecycleStatus || "") || p.IsDiscontinued === "true",
     endOfLife: /end of life|eol|obsolete/i.test(p.LifecycleStatus || ""),

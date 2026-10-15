@@ -23,7 +23,7 @@ The distributor clients are the same as in [parts-sourcing-plugin](https://githu
 | `watch_diff` | Changes between the last two saved checks, with no API calls. |
 | `watch_status` | Which distributor keys are configured, and the watch file path. |
 
-The first check is a baseline: it only reports parts already below their stock threshold. If a distributor fails during a check (timeout, rate limit), that part is reported as `check-failed` and is not counted as delisted; it's compared again next time.
+The first check is a baseline: it only reports parts already below their stock threshold, parts no distributor lists (`not-found`, usually a typo) and parts already end-of-life (`end-of-life`). If a distributor fails during a check (timeout, rate limit), that part is reported as `check-failed` and is not counted as delisted; it's compared again next time.
 
 ## Setup
 

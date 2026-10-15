@@ -125,3 +125,12 @@ test("watch file path: ~ expands to the home folder", async () => {
     process.env.PARTS_WATCH_FILE = "/abs/w.json"; assert.equal(watchFile(), "/abs/w.json");
   } finally { if (saved == null) delete process.env.PARTS_WATCH_FILE; else process.env.PARTS_WATCH_FILE = saved; }
 });
+
+test("round 3: first check flags parts no distributor lists and parts already end-of-life, once", async () => {
+  const { diffSnapshots } = await import("../src/watch.js");
+  const cur = { parts: { TYPO: { qty: 100, distributors: { digikey: { found: false }, mouser: { found: false } } }, OLD: { qty: 100, distributors: { digikey: { found: true, lifecycle: "Obsolete", discontinued: false }, mouser: { found: true, lifecycle: null, discontinued: true } } }, OK: { qty: 100, distributors: { digikey: { found: true, lifecycle: "Active", discontinued: false } } } } };
+  const d = { parts: [{ partNumber: "TYPO" }, { partNumber: "OLD" }, { partNumber: "OK" }] };
+  const first = diffSnapshots(null, cur, d);
+  assert.deepEqual(first.map((c) => `${c.partNumber}:${c.type}`).sort(), ["OLD:end-of-life", "OLD:end-of-life", "TYPO:not-found"]);
+  assert.deepEqual(diffSnapshots(cur, cur, d), []);
+});

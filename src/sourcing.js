@@ -87,6 +87,7 @@ export async function compareDistributors({ partNumber, quantities, distributors
     manufacturerPartNumber: r.manufacturerPartNumber,
     stock: r.stock,
     leadTime: r.leadTime,
+    leadTimeDays: r.leadTimeDays ?? null,
     lifecycle: r.lifecycle,
     discontinued: r.discontinued,
     countryOfOrigin: r.countryOfOrigin,

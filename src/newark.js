@@ -21,6 +21,7 @@ async function e14(term, limit) {
     "callInfo.apiKey": process.env.NEWARK_API_KEY,
   });
   const res = await request("Newark", `${BASE}?${q}`, { headers: { Accept: "application/json" } });
+  if (res.status === 401 || res.status === 403) throw new Error(`Newark rejected the API key (HTTP ${res.status}). Check NEWARK_API_KEY.`);
   if (!res.ok) throw new Error(`Newark HTTP ${res.status}`);
   const j = await res.json();
   if (j.Fault) throw new Error(`Newark: ${j.Fault.faultstring || "API fault"}`);
@@ -52,6 +53,7 @@ export function normalizeNewark(p) {
     description: p.displayName || null,
     stock: typeof stock === "number" ? stock : stock != null ? parseInt(stock, 10) || 0 : null,
     leadTime: lead ? `${lead} days (for quantities beyond stock)` : null,
+    leadTimeDays: Number(lead) > 0 ? Math.round(Number(lead)) : null, // same unit at every distributor
     stockByWarehouse: (p.stock?.regionalBreakdown || []).map((w) => ({ warehouse: w.warehouse, stock: w.level })),
     lifecycle: status ? `${status} (Newark stocking status)` : null,
     discontinued: EOL_STATUS.test(String(status || "")),
