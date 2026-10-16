@@ -16,9 +16,17 @@ async function ms(path, body) {
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify(body),
   });
+  let j = null;
+  try { j = await res.json(); } catch { j = null; }
+  // Mouser reports its per-minute and per-day call limits as HTTP 403 with Errors[].Code "TooManyRequests".
+  const errs = (j && Array.isArray(j.Errors) ? j.Errors : []);
+  if (errs.some((e) => /TooManyRequests|MaxCall/i.test(`${e.Code} ${e.ResourceKey} ${e.Message}`))) {
+    const perDay = errs.some((e) => /day/i.test(`${e.ResourceKey} ${e.Message}`));
+    throw new Error(`Mouser rate limit reached (${perDay ? "daily call limit" : "30 calls per minute"}). This is not a key problem. ${perDay ? "Try again tomorrow" : "Wait a minute and try again"}, or query fewer parts at once.`);
+  }
   if (res.status === 401 || res.status === 403) throw new Error(`Mouser rejected the API key (HTTP ${res.status}). Check MOUSER_API_KEY.`);
   if (!res.ok) throw new Error(`Mouser HTTP ${res.status}`);
-  const j = await res.json();
+  if (!j) throw new Error("Mouser returned a response that is not JSON. Try again later.");
   if (j.Errors && j.Errors.length) { const msg = j.Errors.map((e) => e.Message).join("; "); throw new Error(/unique identifier|api ?key|unauthori[sz]ed/i.test(msg) ? `Mouser rejected the API key (${msg}). Check MOUSER_API_KEY.` : `Mouser: ${msg}`); }
   return j;
 }
@@ -33,19 +41,30 @@ function parsePrice(s) {
   return Number.isFinite(n) ? n : null;
 }
 
+// Stock from Mouser's fields. AvailabilityInStock is a plain count. The Availability text is only trusted in the
+// form "39,388 In Stock"; anything else ("In stock 500, 1000 on order", "On Order") gives null, never digits glued together.
+export function mouserStock(p) {
+  const n = p?.AvailabilityInStock;
+  if (n != null && n !== "") { const t = String(n).trim().replace(/,/g, ""); return /^\d+$/.test(t) ? Number(t) : null; }
+  if (/^(none|out of stock)$/i.test(String(p?.Availability ?? "").trim())) return 0;
+  const m = String(p?.Availability ?? "").trim().match(/^(\d{1,3}(?:,\d{3})+|\d+)\s+In Stock$/i);
+  return m ? Number(m[1].replace(/,/g, "")) : null;
+}
+
 export function normalizeMouser(p) {
   if (!p) return null;
   const compliance = p.ProductCompliance || [];
   const coo = compliance.find((c) => /origin|coo/i.test(c.ComplianceName || ""));
-  const stock = p.AvailabilityInStock != null ? parseInt(p.AvailabilityInStock, 10) : parseInt(String(p.Availability || "").replace(/\D/g, ""), 10);
+  const stock = mouserStock(p);
   return {
     distributor: "Mouser",
-    distributorPartNumber: p.MouserPartNumber || null,
+    distributorPartNumber: p.MouserPartNumber && p.MouserPartNumber !== "N/A" ? p.MouserPartNumber : null, // "N/A" = listed but not sold by Mouser
     manufacturer: p.Manufacturer || null,
     manufacturerPartNumber: p.ManufacturerPartNumber || null,
     description: p.Description || null,
-    stock: Number.isFinite(stock) ? stock : p.AvailabilityInStock == null && !p.Availability ? null : 0, // no stock fields at all = not stated
-    leadTime: p.LeadTime || null,
+    stock, // null = not stated or not in a format we recognize (see availabilityText)
+    ...(stock == null && p.Availability ? { availabilityText: String(p.Availability).slice(0, 200) } : {}),
+    leadTime: leadDays(p.LeadTime) ? p.LeadTime : null, // Mouser sends "0 Days" when it has no lead time
     leadTimeDays: leadDays(p.LeadTime), // same unit at every distributor
     lifecycle: p.LifecycleStatus || null, // Mouser leaves this empty for most active parts; null means "not stated", not "active".
     discontinued: /obsolete|discontinued|end of life|eol/i.test(p.LifecycleStatus || "") || p.IsDiscontinued === "true",
@@ -59,6 +78,7 @@ export function normalizeMouser(p) {
     datasheetUrl: p.DataSheetUrl || null,
     productUrl: p.ProductDetailUrl || null,
     rohs: p.ROHSStatus || null,
+    ...(p.MouserPartNumber === "N/A" ? { availabilityNote: "Mouser lists this part for reference but does not sell it (no Mouser part number)." } : {}),
   };
 }
 

@@ -109,7 +109,7 @@ async function addPartsUnlocked({ parts, defaults: dflt } = {}, file) {
 
 export function removeParts(a = {}, file) { return locked(() => removePartsUnlocked(a, file)); }
 async function removePartsUnlocked({ partNumbers } = {}, file) {
-  const list = (Array.isArray(partNumbers) ? partNumbers : partNumbers ? [partNumbers] : []).map((x) => String(x).trim()).filter(Boolean);
+  const list = (Array.isArray(partNumbers) ? partNumbers : partNumbers ? [partNumbers] : []).filter((x) => typeof x === "string" || typeof x === "number").map((x) => String(x).trim()).filter(Boolean);
   if (!list.length) throw new Error("Give at least one part number to remove.");
   const d = await load(file);
   const want = new Set(list.map(key));
@@ -132,6 +132,7 @@ export function summarize(r, qty) {
   const p = priceAt(r.priceBreaks, qty);
   return {
     found: true,
+    manufacturer: r.manufacturer ?? null,
     distributorPartNumber: r.distributorPartNumber ?? null,
     stock: r.stock ?? null,
     unitPrice: p?.unitPrice ?? null,
@@ -140,6 +141,8 @@ export function summarize(r, qty) {
     lifecycle: r.lifecycle ?? null,
     discontinued: Boolean(r.discontinued),
     leadTime: r.leadTime ?? null,
+    ...(r.matchNote ? { matchNote: r.matchNote } : {}),
+    ...(r.availabilityNote ? { availabilityNote: r.availabilityNote } : {}),
   };
 }
 
@@ -202,7 +205,7 @@ export async function runCheck({ partNumbers, save: doSave = true } = {}, file, 
   let parts = d.parts;
   if (typeof partNumbers === "string") partNumbers = partNumbers.split(/[,;\s]+/).filter(Boolean);
   if (Array.isArray(partNumbers) && partNumbers.length) {
-    const want = new Set(partNumbers.map(key));
+    const want = new Set(partNumbers.filter((x) => typeof x === "string" || typeof x === "number").map(key));
     parts = d.parts.filter((p) => want.has(key(p.partNumber)));
     if (!parts.length) throw new Error("None of those part numbers are on the watch list.");
   }
@@ -234,7 +237,10 @@ export async function runCheck({ partNumbers, save: doSave = true } = {}, file, 
     // re-read under the lock: parts added or removed while the (slow) check ran must not be lost
     await locked(async () => {
       const fresh = await load(file);
-      fresh.snapshots.push(snap);
+      // Drop parts removed from the watch list while the check ran, so they do not come back in the snapshot.
+      const watched = new Set(fresh.parts.map((p) => key(p.partNumber)));
+      for (const pn of Object.keys(snap.parts)) if (!watched.has(key(pn))) delete snap.parts[pn];
+      if (Object.keys(snap.parts).length) fresh.snapshots.push(snap);
       fresh.snapshots = fresh.snapshots.slice(-MAX_SNAPSHOTS);
       await save(fresh, file);
     });
@@ -245,7 +251,7 @@ export async function runCheck({ partNumbers, save: doSave = true } = {}, file, 
     comparedWith: hasPrev ? "latest earlier snapshot of each part" : "nothing (first check; only threshold, not-found and end-of-life alerts)",
     saved,
     changes,
-    summary: `${Object.keys(snap.parts).length} parts checked, ${changes.length} change${changes.length === 1 ? "" : "s"}`,
+    summary: `${Object.keys(snap.parts).length} part${Object.keys(snap.parts).length === 1 ? "" : "s"} checked, ${changes.length} change${changes.length === 1 ? "" : "s"}`,
     current: snap.parts,
     notes: [...notes],
   };

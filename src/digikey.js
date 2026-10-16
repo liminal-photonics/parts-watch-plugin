@@ -144,7 +144,10 @@ export async function digikeyDetails(partNumber) {
   const best = rows[0];
   if (rows.length > 1) {
     best.otherManufacturers = rows.slice(1).map((r) => ({ manufacturer: r.manufacturer, distributorPartNumber: r.distributorPartNumber, stock: r.stock, minimumOrderQty: r.minimumOrderQty }));
-    best.matchNote = `${rows.length} manufacturers list ${partNumber} on Digi-Key; showing the one you can order in small quantities from stock (others under otherManufacturers).`;
+    best.matchNote = `${rows.length} manufacturers list ${partNumber} on Digi-Key; showing the one you can order in small quantities from stock (others under otherManufacturers). Check the manufacturer: some are second-source or clone makers.`;
   }
+  // Full rows for every manufacturer, kept out of the JSON output, so the caller can switch to the manufacturer the
+  // other distributors list (see preferManufacturer in the sourcing core).
+  Object.defineProperty(best, "_alternatives", { value: rows, enumerable: false });
   return best;
 }

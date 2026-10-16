@@ -12,7 +12,8 @@ function pick(distributors, notes) {
   if (typeof distributors === "string" && distributors.trim()) distributors = distributors.split(/[,;\s]+/).filter(Boolean); // "mouser" or "digikey, mouser"
   if (!Array.isArray(distributors) || !distributors.length) return Object.keys(SOURCES);
   const keys = [...new Set(distributors.map((d) => String(d).toLowerCase().replace(/[^a-z]/g, "")))];
-  for (const k of keys) if (!SOURCES[k]) notes.push(`Unknown distributor "${k}" ignored (use digikey, mouser or newark).`);
+  const unknown = keys.filter((k) => !SOURCES[k]);
+  if (unknown.length) notes.push(`Unknown distributor${unknown.length > 1 ? "s" : ""} ${unknown.slice(0, 5).map((k) => `"${k.slice(0, 30)}"`).join(", ")}${unknown.length > 5 ? ` and ${unknown.length - 5} more` : ""} ignored (use digikey, mouser or newark).`);
   return keys.filter((k) => SOURCES[k]);
 }
 
@@ -61,9 +62,33 @@ export async function searchParts({ keyword, limit = 5, distributors } = {}) {
   return { keyword, results, notes };
 }
 
+// "Texas Instruments" / "TEXAS INSTRUMENTS" / "Analog Devices / Maxim Integrated" -> "texas" / "analog"
+export const mfrKey = (m) => (String(m || "").toLowerCase().match(/[a-z0-9]+/) || [""])[0];
+
+// Digi-Key sometimes lists one MPN from several manufacturers (e.g. a clone maker using the original part number) and
+// picks by stock. When Mouser or Newark name the manufacturer, prefer Digi-Key's listing from that manufacturer.
+export function preferManufacturer(results, notes) {
+  const dk = results.digikey;
+  const alts = dk && dk._alternatives;
+  if (!dk) return;
+  const others = Object.entries(results).filter(([k, r]) => k !== "digikey" && r && r.manufacturer).map(([, r]) => r);
+  const keys = new Set(others.map((r) => mfrKey(r.manufacturer)));
+  if (!keys.size || keys.has(mfrKey(dk.manufacturer))) return;
+  const match = (alts || []).find((r) => keys.has(mfrKey(r.manufacturer)));
+  if (match) {
+    const rest = alts.filter((r) => r !== match);
+    const swapped = { ...match, otherManufacturers: rest.map((r) => ({ manufacturer: r.manufacturer, distributorPartNumber: r.distributorPartNumber, stock: r.stock, minimumOrderQty: r.minimumOrderQty })) };
+    swapped.matchNote = `${alts.length} manufacturers list this part number on Digi-Key; showing ${match.manufacturer}, the manufacturer ${others.map((r) => r.distributor).join(" and ")} list. Others (e.g. ${dk.manufacturer}) are under otherManufacturers.`;
+    results.digikey = swapped;
+  } else {
+    notes.push(`Digi-Key's match is made by ${dk.manufacturer}, but ${others.map((r) => `${r.distributor} lists ${r.manufacturer}`).join(" and ")}. Check that it is the part you want.`);
+  }
+}
+
 export async function getPartDetails({ partNumber, distributors } = {}) {
   partNumber = requireText(partNumber, "partNumber");
   const { results, notes } = await fanOut(distributors, (s) => s.details(partNumber));
+  preferManufacturer(results, notes);
   for (const k of Object.keys(results)) if (!results[k]) notes.push(`${SOURCES[k].name}: no match for ${partNumber}.`);
   return { partNumber, results, notes };
 }
@@ -96,6 +121,8 @@ export async function compareDistributors({ partNumber, quantities, distributors
     productUrl: r.productUrl,
     currency: r.currency || null,
     pricing: Object.fromEntries(quantities.map((q) => [q, priceAt(r.priceBreaks, q)])),
+    ...(r.matchNote ? { matchNote: r.matchNote } : {}),
+    ...(r.availabilityNote ? { availabilityNote: r.availabilityNote } : {}),
   }));
   const cheapest = {};
   // only compare prices in one currency (a non-US Newark store prices in its own currency)
@@ -115,7 +142,8 @@ export async function compareDistributors({ partNumber, quantities, distributors
   if (mixed.length) flags.push(`Not compared for cheapest (prices not in ${baseCur}): ${mixed.map((r) => `${r.distributor} (${r.currency})`).join(", ")}.`);
   for (const r of rows) {
     if (r.discontinued || /obsolete|not recommended|eol|end of life|last time/i.test(r.lifecycle || "")) flags.push(`${r.distributor}: lifecycle "${r.lifecycle}".`);
-    if (r.stock === 0) flags.push(`${r.distributor}: zero stock.`);
+    if (r.availabilityNote) flags.push(`${r.distributor}: ${r.availabilityNote}`);
+    else if (r.stock === 0) flags.push(`${r.distributor}: zero stock.`);
     else if (r.stock == null) flags.push(`${r.distributor}: stock not stated.`);
   }
   return { partNumber, quantities, rows, cheapestInStock: cheapest, flags, notes: d.notes };
