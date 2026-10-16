@@ -21,7 +21,13 @@ async function e14(term, limit) {
     "callInfo.apiKey": process.env.NEWARK_API_KEY,
   });
   const res = await request("Newark", `${BASE}?${q}`, { headers: { Accept: "application/json" } });
-  if (res.status === 401 || res.status === 403) throw new Error(`Newark rejected the API key (HTTP ${res.status}). Check NEWARK_API_KEY.`);
+  if (res.status === 401 || res.status === 403) {
+    // Only call it a key problem when Newark says so (401, or a Mashery auth code / "not authorized" text).
+    const code = res.headers.get("x-mashery-error-code") || "";
+    const body = await res.text().catch(() => "");
+    if (res.status === 401 || /NOT_AUTHORIZED|INACTIVE|INVALID_KEY|UNKNOWN_KEY|ERR_401/i.test(code) || /not authori[sz]ed|invalid (api )?key|developer inactive|api key/i.test(body)) throw new Error(`Newark rejected the API key (HTTP ${res.status}). Check NEWARK_API_KEY.`);
+    throw new Error(`Newark refused the request (HTTP 403) without giving a reason. This is often a short-lived limit; try again in a minute. If it keeps happening, check NEWARK_API_KEY.`);
+  }
   if (!res.ok) throw new Error(`Newark HTTP ${res.status}`);
   const j = await res.json();
   if (j.Fault) throw new Error(`Newark: ${j.Fault.faultstring || "API fault"}`);

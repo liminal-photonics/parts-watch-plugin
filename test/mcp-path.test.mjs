@@ -27,6 +27,8 @@ before(async () => {
       if (req.url.startsWith("/newark")) {
         mode.newarkHits = (mode.newarkHits || 0) + 1;
         if (mode.newark === "qps" || (mode.newark === "qps-once" && mode.newarkHits === 1)) return send(403, { error: { code: 403, message: "Account Over Queries Per Second Limit" } }, { "x-mashery-error-code": "ERR_403_DEVELOPER_OVER_QPS", "retry-after": "1" });
+        if (mode.newark === "bare403") return send(403, {});
+        if (mode.newark === "auth403") return send(403, { error: { code: 403, message: "Not Authorized" } }, { "x-mashery-error-code": "ERR_403_NOT_AUTHORIZED" });
         if (mode.newark === "rate") return send(403, { error: { code: 403, message: "Account Over Rate Limit" } }, { "x-mashery-error-code": "ERR_403_DEVELOPER_OVER_RATE" });
         return send(200, { manufacturerPartNumberSearchReturn: { numberOfResults: 0, products: [] } });
       }
@@ -123,4 +125,14 @@ test("watch_remove ignores non-text part numbers instead of echoing [object Obje
     const r = await c.callTool({ name: "watch_remove", arguments: { partNumbers: [{ a: 1 }, "?"] } });
     assert.doesNotMatch(r.content[0].text, /object Object/);
   } finally { await c.close(); }
+});
+
+test("MCP: a Newark 403 with no rate-limit or auth signal is reported neutrally, not as a bad key", async () => {
+  mode = { newark: "bare403" };
+  let d = await details("BSS138", ["newark"]);
+  assert.doesNotMatch(d.newark.error, /rejected the API key/i);
+  assert.match(d.newark.error, /try again/i);
+  mode = { newark: "auth403" };
+  d = await details("BSS138", ["newark"]);
+  assert.match(d.newark.error, /rejected the API key/i);
 });
