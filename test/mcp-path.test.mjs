@@ -33,6 +33,7 @@ before(async () => {
         return send(200, { manufacturerPartNumberSearchReturn: { numberOfResults: 0, products: [] } });
       }
       if (req.url.startsWith("/dk/v1/oauth2/token")) return send(200, { access_token: "t", expires_in: 600 });
+      if (mode.dkfresh && req.url.includes("-ND/productdetails")) { mode.dkFreshHits = (mode.dkFreshHits || 0) + 1; const dk = decodeURIComponent(req.url.split("/search/")[1].split("/")[0]); return send(200, { Product: dk.startsWith("296-") ? dkProduct("Texas Instruments", dk, 47112) : dkProduct("UMW", dk, 26200) }); }
       if (req.url.includes("/productdetails")) return send(404, {});
       if (req.url.includes("/search/keyword")) return send(200, { Products: [dkProduct("UMW", "4518-X-ND", 26200), dkProduct("Texas Instruments", "296-11607-1-ND", 5112)] });
       send(404, {});
@@ -135,4 +136,11 @@ test("MCP: a Newark 403 with no rate-limit or auth signal is reported neutrally,
   mode = { newark: "auth403" };
   d = await details("BSS138", ["newark"]);
   assert.match(d.newark.error, /rejected the API key/i);
+});
+
+test("MCP: Digi-Key stock found through keyword search is refreshed from the product page data (keyword results can be stale)", async () => {
+  mode = { dkfresh: true };
+  const d = await details("SN74LVC1G14DBVR", ["mouser", "digikey"]);
+  assert.equal(d.digikey.manufacturer, "Texas Instruments");
+  assert.equal(d.digikey.stock, 47112);
 });

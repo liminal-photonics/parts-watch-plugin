@@ -137,6 +137,14 @@ export async function digikeyDetails(partNumber) {
     return true;
   });
   if (!exact.length) return null;
+  // Keyword search results can carry stale stock (live: SN74LVC1G14DBVR with Limit 20 showed 5112 while the product
+  // page and productdetails showed 47112). Refresh each match by its unique Digi-Key part number.
+  for (let i = 0; i < Math.min(exact.length, 4); i++) {
+    const dkpn = pickVariation(exact[i].ProductVariations).DigiKeyProductNumber;
+    if (!dkpn) continue;
+    const fresh = await dk(`/products/v4/search/${encodeURIComponent(dkpn)}/productdetails`).catch(() => null);
+    if (fresh?.Product && norm(fresh.Product.ManufacturerProductNumber) === norm(exact[i].ManufacturerProductNumber)) exact[i] = fresh.Product;
+  }
   // Rank: orderable in small quantities from stock (min order <= 100 with a price), then most stock. This avoids picking
   // a reel-only broker listing (e.g. BSS138 from a reseller with a 6000-piece minimum) over the original manufacturer.
   const smallOrder = (r) => (r.stock ?? 0) > 0 && r.priceBreaks.length > 0 && (r.minimumOrderQty ?? r.priceBreaks[0].qty ?? Infinity) <= 100;
