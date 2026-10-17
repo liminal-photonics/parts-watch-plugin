@@ -59,7 +59,7 @@ Never commit keys. The plugin reads them from the environment only and never wri
 - Part numbers match exactly first. Newark often lists part numbers without punctuation (ERJ-3EKF1002V is ERJ3EKF1002V there), so when there's no exact match the tools also accept a match that ignores punctuation, and say so. Mouser rejects some symbols in keywords, so µ, Ω, ± and ° are converted to u, ohm, +/- and deg for Mouser.
 
 ## Reliability fields (v0.2.0)
-- Every tool result carries `retrievedAt` (UTC) and `plugin: { version, gitSha }`; `watch_status` also reports `version`, `gitSha` and where the SHA came from.
+- Every tool result carries `retrievedAt` (UTC) and `plugin: { name, version, gitSha }`; `watch_status` also reports `pluginName`, `version`, `gitSha` and where the SHA came from.
 - Each distributor entry in a check records `lifecycleStatus` (`active`, `nrnd`, `eol`, `preliminary`, `unknown`), `manufacturerConfirmed`, `exactMatch` and `stockFresh`. A blank Mouser lifecycle and Newark's stocking status are `unknown`, never active.
 - `watch_check` raises a `needs-check` change on every check where the maker is not confirmed (several makers list the MPN on Digi-Key and no other distributor confirmed which one) or the match is punctuation-only. Stock alerts say "stock may be stale" when Digi-Key stock could not be refreshed.
 - A Newark response without its search-results wrapper is a `check-failed` error, not "no longer listed". Non-numeric Newark stock is `null`, not 0.

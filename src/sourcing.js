@@ -1,7 +1,7 @@
 import { digikeyConfigured, digikeySearch, digikeyDetails } from "./digikey.js";
 import { mouserConfigured, mouserSearch, mouserDetails } from "./mouser.js";
 import { newarkConfigured, newarkSearch, newarkDetails } from "./newark.js";
-import { pluginVersion } from "./version.js";
+import { versionInfo } from "./version.js";
 
 const SOURCES = {
   digikey: { name: "Digi-Key", configured: digikeyConfigured, search: digikeySearch, details: digikeyDetails, env: "DIGIKEY_CLIENT_ID and DIGIKEY_CLIENT_SECRET" },
@@ -182,9 +182,8 @@ export async function compareDistributors({ partNumber, quantities, distributors
 }
 
 export function status() {
-  const v = pluginVersion();
   return {
     ...Object.fromEntries(Object.entries(SOURCES).map(([k, s]) => [k, s.configured() ? "configured" : `missing ${s.env}`])),
-    plugin: v.name, version: v.version, gitSha: v.gitSha, gitShaSource: v.gitShaSource,
+    ...versionInfo(),
   };
 }

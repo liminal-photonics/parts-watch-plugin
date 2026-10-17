@@ -38,7 +38,7 @@ const HANDLERS = {
   watch_list: (a) => listParts(a),
   watch_check: (a) => runCheck(a),
   watch_diff: (a) => lastDiff(a),
-  watch_status: async () => { const s = status(); const { plugin, version, gitSha, gitShaSource, ...distributors } = s; return { distributors, watchFile: watchFile(), plugin, version, gitSha, gitShaSource }; },
+  watch_status: async () => { const s = status(); const { pluginName, version, gitSha, gitShaSource, ...distributors } = s; return { distributors, watchFile: watchFile(), pluginName, version, gitSha, gitShaSource }; },
 };
 
 const server = new Server({ name: "parts-watch", version: pluginVersion().version || "0.0.0" }, { capabilities: { tools: {} } });

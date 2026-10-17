@@ -59,6 +59,13 @@ export const asOf = () => new Date().toISOString();
 // Stamp a tool result with when it was retrieved and which build produced it.
 export function stamp(out) {
   const v = pluginVersion();
-  if (out && typeof out === "object" && !Array.isArray(out)) return { ...out, retrievedAt: asOf(), plugin: { version: v.version, gitSha: v.gitSha } };
-  return { result: out, retrievedAt: asOf(), plugin: { version: v.version, gitSha: v.gitSha } };
+  if (out && typeof out === "object" && !Array.isArray(out)) return { ...out, retrievedAt: asOf(), plugin: { name: v.name, version: v.version, gitSha: v.gitSha } };
+  return { result: out, retrievedAt: asOf(), plugin: { name: v.name, version: v.version, gitSha: v.gitSha } };
+}
+
+// Fields for a *_status tool: plugin name, version, git commit and where the commit was read from.
+// (The name is pluginName because stamp() adds a "plugin" object to every result.)
+export function versionInfo() {
+  const v = pluginVersion();
+  return { pluginName: v.name, version: v.version, gitSha: v.gitSha, gitShaSource: v.gitShaSource };
 }
