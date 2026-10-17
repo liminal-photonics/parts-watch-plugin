@@ -1,7 +1,7 @@
 {
   "name": "parts-watch",
   "displayName": "Parts Watch (Digi-Key, Mouser, Newark)",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Watch a BOM or part list across Digi-Key, Mouser and Newark and get only what changed since the last check: stock below your threshold, price moves at your build quantity, lifecycle or stocking-status changes and lead-time changes. Watch list and history stay in a local JSON file. Includes a skill for setting up a scheduled check. Bring your own API keys.",
   "author": { "name": "Liminal Photonics" },
   "homepage": "https://github.com/liminal-photonics/parts-watch-plugin",
