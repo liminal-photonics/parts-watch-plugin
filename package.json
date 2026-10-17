@@ -1,6 +1,6 @@
 {
   "name": "parts-watch-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server that watches a part list across Digi-Key, Mouser and Newark and reports stock, price, lifecycle and lead-time changes.",
   "type": "module",
   "bin": { "parts-watch-mcp": "src/index.js" },

@@ -3,7 +3,7 @@
     "parts-watch": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "github:liminal-photonics/parts-watch-plugin"],
+      "args": ["-y", "github:liminal-photonics/parts-watch-plugin#v0.2.0"],
       "env": {
         "DIGIKEY_CLIENT_ID": "${env:DIGIKEY_CLIENT_ID}",
         "DIGIKEY_CLIENT_SECRET": "${env:DIGIKEY_CLIENT_SECRET}",

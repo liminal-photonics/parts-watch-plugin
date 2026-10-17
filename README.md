@@ -58,6 +58,13 @@ Never commit keys. The plugin reads them from the environment only and never wri
 - Digi-Key splits a product into packaging options (cut tape, tape & reel, Digi-Reel). Prices come from the in-stock option a buyer would order (cut tape first, then the lowest minimum order); stock is Digi-Key's product total, because the options share one pool. Each option's stock is listed under `stockByPackaging`. When a part number is shared by several manufacturers, Digi-Key's exact lookup fails, so the tool falls back to keyword search, keeps exact part-number matches only, prefers the manufacturer you can order from stock in small quantities, and lists the others.
 - Part numbers match exactly first. Newark often lists part numbers without punctuation (ERJ-3EKF1002V is ERJ3EKF1002V there), so when there's no exact match the tools also accept a match that ignores punctuation, and say so. Mouser rejects some symbols in keywords, so µ, Ω, ± and ° are converted to u, ohm, +/- and deg for Mouser.
 
+## Reliability fields (v0.2.0)
+- Every tool result carries `retrievedAt` (UTC) and `plugin: { name, version, gitSha }`; `watch_status` also reports `pluginName`, `version`, `gitSha` and where the SHA came from.
+- Each distributor entry in a check records `lifecycleStatus` (`active`, `nrnd`, `eol`, `preliminary`, `unknown`), `manufacturerConfirmed`, `exactMatch` and `stockFresh`. A blank Mouser lifecycle and Newark's stocking status are `unknown`, never active.
+- `watch_check` raises a `needs-check` change on every check where the maker is not confirmed (several makers list the MPN on Digi-Key and no other distributor confirmed which one) or the match is punctuation-only. Stock alerts say "stock may be stale" when Digi-Key stock could not be refreshed.
+- A Newark response without its search-results wrapper is a `check-failed` error, not "no longer listed". Non-numeric Newark stock is `null`, not 0.
+- `mcp.json` pins `#v0.2.0`; the tag is created on the merge commit after merge. Until then, pin a commit SHA.
+
 ## Development
 
 ```

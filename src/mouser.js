@@ -1,5 +1,6 @@
 // Mouser Search API v1 client (API key).
 import { request } from "./http.js";
+import { lifecycleFields } from "./lifecycle.js";
 const BASE = process.env.MOUSER_API_BASE || "https://api.mouser.com/api/v1";
 
 // "168 Days", "12 Weeks" -> days
@@ -67,6 +68,7 @@ export function normalizeMouser(p) {
     leadTime: leadDays(p.LeadTime) ? p.LeadTime : null, // Mouser sends "0 Days" when it has no lead time
     leadTimeDays: leadDays(p.LeadTime), // same unit at every distributor
     lifecycle: p.LifecycleStatus || null, // Mouser leaves this empty for most active parts; null means "not stated", not "active".
+    ...lifecycleFields(p.IsDiscontinued === "true" ? "Discontinued" : p.LifecycleStatus, "Mouser"),
     discontinued: /obsolete|discontinued|end of life|eol/i.test(p.LifecycleStatus || "") || p.IsDiscontinued === "true",
     endOfLife: /end of life|eol|obsolete/i.test(p.LifecycleStatus || ""),
     countryOfOrigin: coo ? coo.ComplianceValue : null,
@@ -102,8 +104,14 @@ export async function mouserDetails(partNumber) {
   const parts = j.SearchResults?.Parts || [];
   const pn = partNumber.toUpperCase();
   const alnum = (x) => String(x || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-  const exact = parts.find((p) => (p.ManufacturerPartNumber || "").toUpperCase() === pn || (p.MouserPartNumber || "").toUpperCase() === pn)
-    || (alnum(pn).length >= 4 ? parts.find((p) => alnum(p.ManufacturerPartNumber) === alnum(pn)) : undefined);
-  // Mouser can return near matches; only an exact MPN or Mouser PN counts as found.
-  return exact ? normalizeMouser(exact) : null;
+  const strict = parts.find((p) => (p.ManufacturerPartNumber || "").toUpperCase() === pn || (p.MouserPartNumber || "").toUpperCase() === pn);
+  // Mouser can return near matches; only an exact MPN or Mouser PN counts as found. A punctuation-blind match
+  // (ERJ3EKF1002V for ERJ-3EKF1002V) is returned, but marked exactMatch:false with a note so it can't pass silently.
+  const loose = strict ? null : (alnum(pn).length >= 4 ? parts.find((p) => alnum(p.ManufacturerPartNumber) === alnum(pn)) : undefined);
+  const hit = strict || loose;
+  if (!hit) return null;
+  const row = normalizeMouser(hit);
+  row.exactMatch = Boolean(strict);
+  if (!strict) row.matchNote = `Mouser lists this part as ${hit.ManufacturerPartNumber}, which matches ${partNumber} only when punctuation is ignored. Check that it is the same ordering code.`;
+  return row;
 }

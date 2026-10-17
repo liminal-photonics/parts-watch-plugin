@@ -1,5 +1,6 @@
 // Digi-Key Product Information API v4 client (OAuth2 client credentials).
 import { request } from "./http.js";
+import { lifecycleFields } from "./lifecycle.js";
 const BASE = process.env.DIGIKEY_API_BASE || "https://api.digikey.com";
 let tokenCache = { token: null, expires: 0 };
 
@@ -85,6 +86,7 @@ export function normalizeDigikey(p) {
     leadTime: p.ManufacturerLeadWeeks ? `${p.ManufacturerLeadWeeks} weeks (manufacturer)` : null,
     leadTimeDays: Number.parseFloat(p.ManufacturerLeadWeeks) > 0 ? Math.round(Number.parseFloat(p.ManufacturerLeadWeeks) * 7) : null, // same unit at every distributor
     lifecycle: status,
+    ...lifecycleFields(p.Discontinued || p.EndOfLife ? "Discontinued" : status, "Digi-Key"),
     discontinued: Boolean(p.Discontinued),
     endOfLife: Boolean(p.EndOfLife),
     countryOfOrigin: null, // Product Information API v4 does not return country of origin.
@@ -116,14 +118,14 @@ export async function digikeySearch(keyword, limit = 10) {
       return true;
     })
     .slice(0, limit)
-    .map(normalizeDigikey);
+    .map((p) => ({ ...normalizeDigikey(p), stockFresh: false, stockNote: "Digi-Key keyword-search stock can be stale; use get_part_details for a refreshed count." }));
 }
 
 const norm = (x) => String(x || "").toUpperCase().replace(/\s+/g, "");
 
 export async function digikeyDetails(partNumber) {
   const j = await dk(`/products/v4/search/${encodeURIComponent(partNumber)}/productdetails`);
-  if (j?.Product) return normalizeDigikey(j.Product);
+  if (j?.Product) return { ...normalizeDigikey(j.Product), stockFresh: true, manufacturerConfirmed: true, exactMatch: true };
   // productdetails returns 404 when an MPN is shared by several manufacturers (e.g. LM358DR). Fall back to a
   // keyword search and keep exact manufacturer or Digi-Key part number matches only.
   const k = await dk(`/products/v4/search/keyword`, { method: "POST", body: JSON.stringify({ Keywords: partNumber, Limit: 20, Offset: 0 }) });
@@ -138,24 +140,47 @@ export async function digikeyDetails(partNumber) {
   });
   if (!exact.length) return null;
   // Keyword search results can carry stale stock (live: SN74LVC1G14DBVR with Limit 20 showed 5112 while the product
-  // page and productdetails showed 47112). Refresh each match by its unique Digi-Key part number.
-  for (let i = 0; i < Math.min(exact.length, 4); i++) {
-    const dkpn = pickVariation(exact[i].ProductVariations).DigiKeyProductNumber;
-    if (!dkpn) continue;
-    const fresh = await dk(`/products/v4/search/${encodeURIComponent(dkpn)}/productdetails`).catch(() => null);
-    if (fresh?.Product && norm(fresh.Product.ManufacturerProductNumber) === norm(exact[i].ManufacturerProductNumber)) exact[i] = fresh.Product;
+  // page and productdetails showed 47112). Refresh each match by its unique Digi-Key part number. A failed or skipped
+  // refresh is never hidden: the row is marked stockFresh:false with the reason, and a rate limit stops the lookup.
+  const REFRESH_MAX = 8;
+  const fresh = new Map();
+  for (let i = 0; i < exact.length; i++) {
+    const p = exact[i];
+    const dkpn = pickVariation(p.ProductVariations).DigiKeyProductNumber;
+    if (i >= REFRESH_MAX) { fresh.set(p, `not refreshed (only the first ${REFRESH_MAX} matches are refreshed)`); continue; }
+    if (!dkpn) { fresh.set(p, "not refreshed (no Digi-Key part number)"); continue; }
+    let r;
+    try { r = await dk(`/products/v4/search/${encodeURIComponent(dkpn)}/productdetails`); }
+    catch (e) {
+      if (/rate limit/i.test(e.message)) throw e;
+      fresh.set(p, `refresh failed (${e.message.slice(0, 120)})`);
+      continue;
+    }
+    if (r?.Product && norm(r.Product.ManufacturerProductNumber) === norm(p.ManufacturerProductNumber)) { exact[i] = r.Product; fresh.set(r.Product, true); }
+    else fresh.set(p, r?.Product ? "refresh returned a different part number" : "refresh found no product");
   }
   // Rank: orderable in small quantities from stock (min order <= 100 with a price), then most stock. This avoids picking
   // a reel-only broker listing (e.g. BSS138 from a reseller with a 6000-piece minimum) over the original manufacturer.
   const smallOrder = (r) => (r.stock ?? 0) > 0 && r.priceBreaks.length > 0 && (r.minimumOrderQty ?? r.priceBreaks[0].qty ?? Infinity) <= 100;
-  const rows = exact.map(normalizeDigikey).sort((a, b) => smallOrder(b) - smallOrder(a) || (b.stock ?? 0) - (a.stock ?? 0));
+  const rows = exact.map((p) => {
+    const f = fresh.get(p);
+    const row = normalizeDigikey(p);
+    row.stockFresh = f === true;
+    if (f !== true) row.stockNote = `Digi-Key stock is from keyword search and may be stale: ${f || "not refreshed"}.`;
+    return row;
+  }).sort((a, b) => smallOrder(b) - smallOrder(a) || (b.stock ?? 0) - (a.stock ?? 0));
   const best = rows[0];
+  // One manufacturer listing the MPN is taken as that manufacturer. With several (e.g. TI and the UMW clone), the
+  // pick is tentative until another distributor confirms the maker (see preferManufacturer in core.js).
+  const makers = new Set(rows.map((r) => String(r.manufacturer || "").toLowerCase()));
+  best.manufacturerConfirmed = makers.size <= 1;
   if (rows.length > 1) {
     best.otherManufacturers = rows.slice(1).map((r) => ({ manufacturer: r.manufacturer, distributorPartNumber: r.distributorPartNumber, stock: r.stock, minimumOrderQty: r.minimumOrderQty }));
     best.matchNote = `${rows.length} manufacturers list ${partNumber} on Digi-Key; showing the one you can order in small quantities from stock (others under otherManufacturers). Check the manufacturer: some are second-source or clone makers.`;
   }
   // Full rows for every manufacturer, kept out of the JSON output, so the caller can switch to the manufacturer the
   // other distributors list (see preferManufacturer in the sourcing core).
+  best.exactMatch = true;
   Object.defineProperty(best, "_alternatives", { value: rows, enumerable: false });
   return best;
 }

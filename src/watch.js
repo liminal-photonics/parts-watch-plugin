@@ -139,8 +139,13 @@ export function summarize(r, qty) {
     priceNote: p?.belowMinimum ? `qty below minimum break ${p.minimumBreak}` : null,
     currency: r.currency || null,
     lifecycle: r.lifecycle ?? null,
+    lifecycleStatus: r.lifecycleStatus ?? "unknown",
     discontinued: Boolean(r.discontinued),
     leadTime: r.leadTime ?? null,
+    manufacturerConfirmed: r.manufacturerConfirmed ?? true,
+    exactMatch: r.exactMatch ?? true,
+    stockFresh: r.stockFresh ?? true,
+    ...(r.stockNote ? { stockNote: r.stockNote } : {}),
     ...(r.matchNote ? { matchNote: r.matchNote } : {}),
     ...(r.availabilityNote ? { availabilityNote: r.availabilityNote } : {}),
   };
@@ -164,11 +169,16 @@ export function diffSnapshots(prev, cur, d) {
       if (!c.found) { if (o && o.found) add("no-longer-listed", "Part no longer found at this distributor"); continue; }
       if (o && !o.found && !o.error) add("newly-listed", "Part now found at this distributor");
       const usable = o && o.found && !o.error;
+      // Rows a person must check before trusting them: an unconfirmed maker (e.g. TI vs a clone with the same MPN),
+      // a punctuation-only match, or Digi-Key stock that could not be refreshed. Raised on every check, not just once.
+      if (c.manufacturerConfirmed === false) add("needs-check", `manufacturer not confirmed (${c.manufacturer}); several makers list this part number and no other distributor confirmed which one`);
+      if (c.exactMatch === false) add("needs-check", `not an exact part-number match (${c.matchNote || "punctuation-blind match"})`);
+      const stale = c.stockFresh === false ? ` (stock may be stale: ${c.stockNote || "not refreshed"})` : "";
       // Stock: alert when it is below the threshold now and was not before (or this is the first check).
       if (c.stock != null && c.stock < cfg.minStock && (!usable || o.stock == null || o.stock >= cfg.minStock))
-        add("stock-below-threshold", `stock ${c.stock} is below ${cfg.minStock}${usable && o.stock != null ? ` (was ${o.stock})` : ""}`, { stock: c.stock, minStock: cfg.minStock });
+        add("stock-below-threshold", `stock ${c.stock} is below ${cfg.minStock}${usable && o.stock != null ? ` (was ${o.stock})` : ""}${stale}`, { stock: c.stock, minStock: cfg.minStock, stockFresh: c.stockFresh !== false });
       if (usable && o.stock != null && c.stock != null && o.stock < cfg.minStock && c.stock >= cfg.minStock)
-        add("stock-recovered", `stock ${c.stock} is back at or above ${cfg.minStock} (was ${o.stock})`);
+        add("stock-recovered", `stock ${c.stock} is back at or above ${cfg.minStock} (was ${o.stock})${stale}`);
       if (!usable) continue;
       if (pp.qty === cp.qty && o.unitPrice != null && c.unitPrice != null && o.currency === c.currency) {
         const ch = pct(o.unitPrice, c.unitPrice);
@@ -183,7 +193,7 @@ export function diffSnapshots(prev, cur, d) {
     const missing = (x) => x && Object.values(x.distributors || {}).length > 0 && Object.values(x.distributors).every((e) => e && !e.found && !e.error);
     if (missing(cp) && !missing(pp)) changes.push({ partNumber: pn, type: "not-found", detail: "Not found at any distributor checked; check the part number" });
     if (!pp) for (const [dist, c] of Object.entries(cp.distributors)) {
-      if (c.found && (c.discontinued || EOL.test(c.lifecycle || ""))) changes.push({ partNumber: pn, distributor: dist, type: "end-of-life", detail: `already "${c.lifecycle ?? "discontinued"}" at the first check` });
+      if (c.found && (c.discontinued || ["eol", "nrnd"].includes(c.lifecycleStatus) || EOL.test(c.lifecycle || ""))) changes.push({ partNumber: pn, distributor: dist, type: "end-of-life", detail: `already "${c.lifecycle ?? "discontinued"}" at the first check` });
     }
   }
   if (prev) for (const pn of Object.keys(prev.parts)) if (!cur.parts[pn]) changes.push({ partNumber: pn, type: "unwatched", detail: "No longer on the watch list" });

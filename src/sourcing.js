@@ -1,6 +1,7 @@
 import { digikeyConfigured, digikeySearch, digikeyDetails } from "./digikey.js";
 import { mouserConfigured, mouserSearch, mouserDetails } from "./mouser.js";
 import { newarkConfigured, newarkSearch, newarkDetails } from "./newark.js";
+import { versionInfo } from "./version.js";
 
 const SOURCES = {
   digikey: { name: "Digi-Key", configured: digikeyConfigured, search: digikeySearch, details: digikeyDetails, env: "DIGIKEY_CLIENT_ID and DIGIKEY_CLIENT_SECRET" },
@@ -63,7 +64,9 @@ export async function searchParts({ keyword, limit = 5, distributors } = {}) {
 }
 
 // "Texas Instruments" / "TEXAS INSTRUMENTS" / "Analog Devices / Maxim Integrated" -> "texas" / "analog"
-export const mfrKey = (m) => (String(m || "").toLowerCase().match(/[a-z0-9]+/) || [""])[0];
+// Known renames that would otherwise look like different makers ("ON Semiconductor" vs "onsemi").
+const MFR_ALIASES = { on: "onsemi", onsemi: "onsemi", fairchild: "onsemi", ti: "texas", nxp: "nxp", freescale: "nxp", maxim: "analog", linear: "analog" };
+export const mfrKey = (m) => { const k = (String(m || "").toLowerCase().match(/[a-z0-9]+/) || [""])[0]; return MFR_ALIASES[k] || k; };
 
 // Digi-Key sometimes lists one MPN from several manufacturers (e.g. a clone maker using the original part number) and
 // picks by stock. When Mouser or Newark name the manufacturer, prefer Digi-Key's listing from that manufacturer.
@@ -73,16 +76,34 @@ export function preferManufacturer(results, notes) {
   if (!dk) return;
   const others = Object.entries(results).filter(([k, r]) => k !== "digikey" && r && r.manufacturer).map(([, r]) => r);
   const keys = new Set(others.map((r) => mfrKey(r.manufacturer)));
-  if (!keys.size || keys.has(mfrKey(dk.manufacturer))) return;
+  if (keys.has(mfrKey(dk.manufacturer))) { dk.manufacturerConfirmed = true; return; }
+  if (!keys.size) {
+    // No other distributor named a maker (not configured, rate-limited, not stocked, or digikey-only call). The
+    // Digi-Key pick stands, but if several makers list the MPN it is unconfirmed and must not go into a BOM as is.
+    if (dk.manufacturerConfirmed === false) notes.push(`Manufacturer NOT confirmed: ${(alts || []).length || "several"} manufacturers list ${dk.manufacturerPartNumber} on Digi-Key and no other distributor answered to confirm which one is meant. Showing ${dk.manufacturer} by stock; check it against the schematic's intended maker before recording it (some listings are second-source or clone makers).`);
+    return;
+  }
   const match = (alts || []).find((r) => keys.has(mfrKey(r.manufacturer)));
   if (match) {
     const rest = alts.filter((r) => r !== match);
-    const swapped = { ...match, otherManufacturers: rest.map((r) => ({ manufacturer: r.manufacturer, distributorPartNumber: r.distributorPartNumber, stock: r.stock, minimumOrderQty: r.minimumOrderQty })) };
+    const swapped = { ...match, manufacturerConfirmed: true, otherManufacturers: rest.map((r) => ({ manufacturer: r.manufacturer, distributorPartNumber: r.distributorPartNumber, stock: r.stock, minimumOrderQty: r.minimumOrderQty })) };
     swapped.matchNote = `${alts.length} manufacturers list this part number on Digi-Key; showing ${match.manufacturer}, the manufacturer ${others.map((r) => r.distributor).join(" and ")} list. Others (e.g. ${dk.manufacturer}) are under otherManufacturers.`;
     results.digikey = swapped;
   } else {
-    notes.push(`Digi-Key's match is made by ${dk.manufacturer}, but ${others.map((r) => `${r.distributor} lists ${r.manufacturer}`).join(" and ")}. Check that it is the part you want.`);
+    dk.manufacturerConfirmed = false;
+    notes.push(`Manufacturer NOT confirmed: Digi-Key's match is made by ${dk.manufacturer}, but ${others.map((r) => `${r.distributor} lists ${r.manufacturer}`).join(" and ")}. Check that it is the part you want.`);
   }
+}
+
+// Conditions that make a row unfit to record in a BOM, lifecycle check or cost model without a human check.
+export function rowWarnings(r) {
+  const w = [];
+  if (!r) return w;
+  if (r.manufacturerConfirmed === false) w.push(`${r.distributor}: manufacturer not confirmed (${r.manufacturer}); several makers list this part number.`);
+  if (r.exactMatch === false) w.push(`${r.distributor}: not an exact part-number match (${r.manufacturerPartNumber}).`);
+  if (r.stockFresh === false) w.push(`${r.distributor}: stock may be stale (${r.stockNote || "not refreshed"}).`);
+  if (r.lifecycleStated === false) w.push(`${r.distributor}: lifecycle not stated; this is "unknown" and does not count as a clean lifecycle check.`);
+  return w;
 }
 
 export async function getPartDetails({ partNumber, distributors } = {}) {
@@ -90,7 +111,8 @@ export async function getPartDetails({ partNumber, distributors } = {}) {
   const { results, notes } = await fanOut(distributors, (s) => s.details(partNumber));
   preferManufacturer(results, notes);
   for (const k of Object.keys(results)) if (!results[k]) notes.push(`${SOURCES[k].name}: no match for ${partNumber}.`);
-  return { partNumber, results, notes };
+  const warnings = Object.values(results).flatMap(rowWarnings);
+  return { partNumber, results, warnings, notes };
 }
 
 export function priceAt(breaks, qty) {
@@ -114,7 +136,13 @@ export async function compareDistributors({ partNumber, quantities, distributors
     leadTime: r.leadTime,
     leadTimeDays: r.leadTimeDays ?? null,
     lifecycle: r.lifecycle,
+    lifecycleStatus: r.lifecycleStatus ?? "unknown",
+    cleanLifecycleCheck: Boolean(r.cleanLifecycleCheck),
     discontinued: r.discontinued,
+    manufacturerConfirmed: r.manufacturerConfirmed ?? true,
+    exactMatch: r.exactMatch ?? true,
+    stockFresh: r.stockFresh ?? true,
+    ...(r.stockNote ? { stockNote: r.stockNote } : {}),
     countryOfOrigin: r.countryOfOrigin,
     countryOfOriginNote: r.countryOfOriginNote,
     datasheetUrl: r.datasheetUrl,
@@ -132,7 +160,8 @@ export async function compareDistributors({ partNumber, quantities, distributors
     let best = null;
     for (const r of rows) {
       const p = r.pricing[q];
-      if (r.currency === baseCur && p && p.unitPrice != null && (r.stock ?? 0) >= q && (!best || p.unitPrice < best.unitPrice)) best = { distributor: r.distributor, unitPrice: p.unitPrice };
+      // Stale stock, an unconfirmed maker or a non-exact match can't win "cheapest in stock".
+      if (r.currency === baseCur && r.stockFresh && r.manufacturerConfirmed && r.exactMatch && p && p.unitPrice != null && (r.stock ?? 0) >= q && (!best || p.unitPrice < best.unitPrice)) best = { distributor: r.distributor, unitPrice: p.unitPrice };
     }
     cheapest[q] = best || "No distributor has this quantity in stock at a listed price";
   }
@@ -141,14 +170,20 @@ export async function compareDistributors({ partNumber, quantities, distributors
   if (queried >= 2 && rows.length === 1) flags.push(`Only found at ${rows[0].distributor} (single source among checked distributors).`);
   if (mixed.length) flags.push(`Not compared for cheapest (prices not in ${baseCur}): ${mixed.map((r) => `${r.distributor} (${r.currency})`).join(", ")}.`);
   for (const r of rows) {
-    if (r.discontinued || /obsolete|not recommended|eol|end of life|last time/i.test(r.lifecycle || "")) flags.push(`${r.distributor}: lifecycle "${r.lifecycle}".`);
+    if (r.discontinued || ["eol", "nrnd"].includes(r.lifecycleStatus) || /obsolete|not recommended|eol|end of life|last time/i.test(r.lifecycle || "")) flags.push(`${r.distributor}: lifecycle "${r.lifecycle}".`);
     if (r.availabilityNote) flags.push(`${r.distributor}: ${r.availabilityNote}`);
     else if (r.stock === 0) flags.push(`${r.distributor}: zero stock.`);
     else if (r.stock == null) flags.push(`${r.distributor}: stock not stated.`);
   }
-  return { partNumber, quantities, rows, cheapestInStock: cheapest, flags, notes: d.notes };
+  flags.push(...d.warnings);
+  const clean = rows.filter((r) => r.cleanLifecycleCheck && r.manufacturerConfirmed && r.exactMatch).map((r) => r.distributor);
+  const lifecycleSummary = { cleanChecks: clean, count: clean.length, note: "Only an explicit active status from the source counts. Two clean checks from separate sources are needed to clear a part (AGENTS.md); unknown never counts." };
+  return { partNumber, quantities, rows, cheapestInStock: cheapest, lifecycleSummary, flags, notes: d.notes };
 }
 
 export function status() {
-  return Object.fromEntries(Object.entries(SOURCES).map(([k, s]) => [k, s.configured() ? "configured" : `missing ${s.env}`]));
+  return {
+    ...Object.fromEntries(Object.entries(SOURCES).map(([k, s]) => [k, s.configured() ? "configured" : `missing ${s.env}`])),
+    ...versionInfo(),
+  };
 }

@@ -1,5 +1,6 @@
 // element14 / Newark / Farnell Product Search API client (API key from partner.element14.com).
 import { request } from "./http.js";
+import { lifecycleFields } from "./lifecycle.js";
 const BASE = process.env.NEWARK_API_BASE || "https://api.element14.com/catalog/products";
 
 export function newarkConfigured() {
@@ -32,13 +33,24 @@ async function e14(term, limit) {
   const j = await res.json();
   if (j.Fault) throw new Error(`Newark: ${j.Fault.faultstring || "API fault"}`);
   // The return wrapper name depends on the search type (keywordSearchReturn, manufacturerPartNumberSearchReturn, premierFarnellPartNumberReturn).
-  const wrapper = Object.values(j).find((v) => v && typeof v === "object" && "numberOfResults" in v) || {};
-  return wrapper.products || [];
+  const wrapper = Object.values(j || {}).find((v) => v && typeof v === "object" && "numberOfResults" in v);
+  // A response without the results wrapper means the API changed or answered with something else. Report it as an
+  // error, not as "no match", so a format change can't turn into false "not stocked" or "single source" flags.
+  if (!wrapper) throw new Error("Newark returned a response in an unexpected format (no search-results wrapper). Treat Newark as not checked, not as 'no match'.");
+  return Array.isArray(wrapper.products) ? wrapper.products : [];
 }
 
 // productStatus is Newark's stocking status (STOCKED, DIRECT_SHIP, NO_LONGER_STOCKED, ...), not the
 // manufacturer lifecycle. Only these values mean the part itself is end of life.
 const EOL_STATUS = /NO_LONGER_MANUFACTURED|OBSOLETE|DISCONTINUED|END_OF_LIFE/i;
+
+// 1234, "1234", "1,234" -> number; anything else (e.g. "Call", "") -> null
+export function stockNumber(v) {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (v == null) return null;
+  const t = String(v).trim().replace(/,/g, "");
+  return /^\d+$/.test(t) ? Number(t) : null;
+}
 
 export function normalizeNewark(p) {
   if (!p) return null;
@@ -57,11 +69,12 @@ export function normalizeNewark(p) {
     manufacturer: p.brandName || p.vendorName || null,
     manufacturerPartNumber: p.translatedManufacturerPartNumber || null,
     description: p.displayName || null,
-    stock: typeof stock === "number" ? stock : stock != null ? parseInt(stock, 10) || 0 : null,
+    stock: stockNumber(stock), // unparseable stock is null ("not stated"), never 0
     leadTime: lead ? `${lead} days (for quantities beyond stock)` : null,
     leadTimeDays: Number(lead) > 0 ? Math.round(Number(lead)) : null, // same unit at every distributor
     stockByWarehouse: (p.stock?.regionalBreakdown || []).map((w) => ({ warehouse: w.warehouse, stock: w.level })),
     lifecycle: status ? `${status} (Newark stocking status)` : null,
+    ...lifecycleFields(EOL_STATUS.test(String(status || "")) ? "Discontinued" : status, "Newark"),
     discontinued: EOL_STATUS.test(String(status || "")),
     endOfLife: EOL_STATUS.test(String(status || "")),
     countryOfOrigin: coo,
@@ -98,6 +111,7 @@ export async function newarkDetails(partNumber) {
   const moq = (p) => p.translatedMinimumOrderQuality ?? p.translatedMinimumOrderQuantity ?? 1;
   exact.sort((a, b) => (stk(b) > 0) - (stk(a) > 0) || moq(a) - moq(b) || stk(b) - stk(a));
   const best = normalizeNewark(exact[0]);
+  best.exactMatch = String(best.manufacturerPartNumber || "").toUpperCase() === pn || String(exact[0].sku || "").toUpperCase() === pn;
   if (alnum(best.manufacturerPartNumber) === alnum(pn) && String(best.manufacturerPartNumber).toUpperCase() !== pn && String(exact[0].sku || "").toUpperCase() !== pn) best.matchNote = `Newark lists this part as ${best.manufacturerPartNumber}.`;
   if (exact.length > 1) best.otherSkus = exact.slice(1).map((p) => ({ sku: p.sku, status: p.productStatus, stock: stk(p), minimumOrderQty: moq(p) }));
   return best;

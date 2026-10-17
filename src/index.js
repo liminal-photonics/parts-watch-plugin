@@ -4,6 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { addParts, removeParts, listParts, runCheck, lastDiff, watchFile, DISTRIBUTORS } from "./watch.js";
 import { status } from "./sourcing.js";
+import { pluginVersion, stamp } from "./version.js";
 
 const part = {
   type: "object",
@@ -28,7 +29,7 @@ const TOOLS = [
     inputSchema: { type: "object", properties: { partNumbers: { type: "array", items: { type: "string" } }, save: { type: "boolean", default: true } } } },
   { name: "watch_diff", description: "Show the changes between the last two saved checks without calling any distributor.",
     inputSchema: { type: "object", properties: { partNumber: { type: "string" } } } },
-  { name: "watch_status", description: "Show which distributor API keys are configured and where the watch file is.", inputSchema: { type: "object", properties: {} } },
+  { name: "watch_status", description: "Show which distributor API keys are configured, where the watch file is, and the plugin version and git commit that is running.", inputSchema: { type: "object", properties: {} } },
 ];
 
 const HANDLERS = {
@@ -37,17 +38,17 @@ const HANDLERS = {
   watch_list: (a) => listParts(a),
   watch_check: (a) => runCheck(a),
   watch_diff: (a) => lastDiff(a),
-  watch_status: async () => ({ distributors: status(), watchFile: watchFile() }),
+  watch_status: async () => { const s = status(); const { pluginName, version, gitSha, gitShaSource, ...distributors } = s; return { distributors, watchFile: watchFile(), pluginName, version, gitSha, gitShaSource }; },
 };
 
-const server = new Server({ name: "parts-watch", version: "0.1.0" }, { capabilities: { tools: {} } });
+const server = new Server({ name: "parts-watch", version: pluginVersion().version || "0.0.0" }, { capabilities: { tools: {} } });
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: a = {} } = req.params;
   try {
     const h = HANDLERS[name];
     if (!h) throw new Error(`Unknown tool ${name}`);
-    return { content: [{ type: "text", text: JSON.stringify(await h(a || {}), null, 2) }] };
+    return { content: [{ type: "text", text: JSON.stringify(stamp(await h(a || {})), null, 2) }] };
   } catch (e) {
     return { isError: true, content: [{ type: "text", text: e.message }] };
   }
